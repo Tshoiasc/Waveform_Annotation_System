@@ -4,6 +4,7 @@ import TrialList from '../components/TrialList'
 import WaveformChart from '../components/WaveformChart'
 import AnnotationToolbar from '../components/AnnotationToolbar'
 import TemplateConfigModal from '../components/TemplateConfigModal'
+import UserMenu from '../components/UserMenu'
 import { useZoomHistory } from '../hooks/useZoomHistory'
 import { useAnnotationSync } from '../hooks/useAnnotationSync'
 import { useAnnotationShortcuts } from '../hooks/useAnnotationShortcuts'
@@ -137,6 +138,7 @@ export default function WorkspacePage() {
             >
               ⚙️ 配置事件序列
             </button>
+            <UserMenu />
           </div>
         </div>
       </header>

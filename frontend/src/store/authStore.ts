@@ -18,6 +18,12 @@ interface AuthState {
   token: string | null
   isAuthenticated: boolean
   login: (username: string, password: string) => Promise<void>
+  register: (
+    username: string,
+    password: string,
+    email?: string,
+    fullName?: string
+  ) => Promise<void>
   logout: () => void
   hasPermission: (permission: string) => boolean
 }
@@ -47,6 +53,25 @@ export const useAuthStore = create<AuthState>()(
           token: data.access_token,
           isAuthenticated: true
         })
+      },
+      async register(username, password, email, fullName) {
+        const response = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username,
+            password,
+            email,
+            full_name: fullName
+          })
+        })
+
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.detail ?? '注册失败')
+        }
+
+        await get().login(username, password)
       },
       logout() {
         set({ user: null, token: null, isAuthenticated: false })
