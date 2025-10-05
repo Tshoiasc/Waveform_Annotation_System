@@ -1,51 +1,43 @@
-import api from './api'
+import { apiClient } from './api'
 import type { FileInfo, TrialMetadata, WaveformResponse } from '../types/waveform'
 
-/**
- * 文件服务层
- */
 class FileService {
-  /**
-   * 获取所有H5文件列表
-   */
   async getFiles(): Promise<FileInfo[]> {
-    const response = await api.get<FileInfo[]>('/files')
-    return response.data
+    const response = await apiClient.get('/api/files')
+    if (!response.ok) {
+      throw new Error('获取文件列表失败')
+    }
+    return (await response.json()) as FileInfo[]
   }
 
-  /**
-   * 获取文件的所有Trial元数据
-   * @param fileId 文件ID (相对路径)
-   */
   async getTrials(fileId: string): Promise<TrialMetadata[]> {
-    const response = await api.get<TrialMetadata[]>(`/files/${fileId}/trials`)
-    return response.data
+    const response = await apiClient.get(`/api/files/${fileId}/trials`)
+    if (!response.ok) {
+      throw new Error('获取试验元数据失败')
+    }
+    return (await response.json()) as TrialMetadata[]
   }
 
-  /**
-   * 获取Trial的完整波形数据
-   * @param fileId 文件ID (相对路径)
-   * @param trialIndex Trial索引
-   */
   async getWaveform(fileId: string, trialIndex: number): Promise<WaveformResponse> {
-    const response = await api.get<WaveformResponse>(
-      `/files/${fileId}/trials/${trialIndex}/waveform`
-    )
-    return response.data
+    const response = await apiClient.get(`/api/files/${fileId}/trials/${trialIndex}/waveform`)
+    if (!response.ok) {
+      throw new Error('获取波形数据失败')
+    }
+    return (await response.json()) as WaveformResponse
   }
 
-  /**
-   * 更新指定H5文件的完成状态
-   */
   async updateFileStatus(fileId: string, finished: boolean): Promise<void> {
-    await api.patch(`/files/${fileId}/status`, { finished })
+    const response = await apiClient.patch(`/api/files/${fileId}/status`, { finished })
+    if (!response.ok) {
+      throw new Error('更新文件状态失败')
+    }
   }
 
-  /**
-   * 更新单个Trial的完成状态
-   */
   async updateTrialStatus(fileId: string, trialIndex: number, finished: boolean): Promise<void> {
-    await api.patch(`/files/${fileId}/trials/${trialIndex}/status`, { finished })
+    const response = await apiClient.patch(`/api/files/${fileId}/trials/${trialIndex}/status`, { finished })
+    if (!response.ok) {
+      throw new Error('更新试验状态失败')
+    }
   }
 }
 

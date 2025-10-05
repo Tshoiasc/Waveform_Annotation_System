@@ -1,60 +1,60 @@
-import axios from 'axios'
+import { useAuthStore } from '../store/authStore'
 
-// 创建Axios实例
-const api = axios.create({
-  baseURL: '/api',
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+class APIClient {
+  async request(url: string, options: RequestInit = {}) {
+    const token = useAuthStore.getState().token
 
-// 请求拦截器
-api.interceptors.request.use(
-  (config) => {
-    // 后续可添加JWT token
-    // const token = localStorage.getItem('token')
-    // if (token) {
-    //   config.headers.Authorization = `Bearer ${token}`
-    // }
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  }
-)
-
-// 响应拦截器
-api.interceptors.response.use(
-  (response) => {
-    return response
-  },
-  (error) => {
-    // 全局错误处理
-    if (error.response) {
-      const { status, data } = error.response
-
-      // 401未授权
-      if (status === 401) {
-        console.error('Unauthorized access')
-        // 后续可添加登出逻辑
-      }
-
-      // 404资源不存在
-      if (status === 404) {
-        console.error('Resource not found:', data.detail)
-      }
-
-      // 500服务器错误
-      if (status === 500) {
-        console.error('Server error:', data.detail)
-      }
-    } else if (error.request) {
-      console.error('Network error:', error.message)
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers
     }
 
-    return Promise.reject(error)
-  }
-)
+    const response = await fetch(url, {
+      ...options,
+      headers
+    })
 
-export default api
+    if (response.status === 401) {
+      useAuthStore.getState().logout()
+      window.location.href = '/login'
+      throw new Error('认证已过期，请重新登录')
+    }
+
+    return response
+  }
+
+  async get(url: string, options: RequestInit = {}) {
+    return this.request(url, { ...options, method: 'GET' })
+  }
+
+  async post(url: string, data?: unknown, options: RequestInit = {}) {
+    return this.request(url, {
+      ...options,
+      method: 'POST',
+      body: data ? JSON.stringify(data) : undefined
+    })
+  }
+
+  async put(url: string, data?: unknown, options: RequestInit = {}) {
+    return this.request(url, {
+      ...options,
+      method: 'PUT',
+      body: data ? JSON.stringify(data) : undefined
+    })
+  }
+
+  async patch(url: string, data?: unknown, options: RequestInit = {}) {
+    return this.request(url, {
+      ...options,
+      method: 'PATCH',
+      body: data ? JSON.stringify(data) : undefined
+    })
+  }
+
+  async delete(url: string, options: RequestInit = {}) {
+    return this.request(url, { ...options, method: 'DELETE' })
+  }
+}
+
+export const apiClient = new APIClient()
