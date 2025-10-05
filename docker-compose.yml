@@ -1,0 +1,48 @@
+name: waveform-annotation
+
+services:
+  # MongoDB数据库
+  mongodb:
+    image: mongo:7.0
+    container_name: waveform-mongodb
+    restart: always
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongodb
+      MONGO_INITDB_ROOT_PASSWORD: Qq1970251968
+      MONGO_INITDB_DATABASE: waveform-annotation-system
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - waveform-net
+
+  # FastAPI后端 (使用云端Redis)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: waveform-backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URI: mongodb://mongodb:Qq1970251968@mongodb:27017/waveform-annotation-system
+      REDIS_URL: redis://:Qq1970251968@117.50.201.9:26739
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      H5_DATA_PATH: /data/dataset
+    volumes:
+      - ./dataset:/data/dataset:ro
+      - ./backend:/app
+    depends_on:
+      - mongodb
+    networks:
+      - waveform-net
+
+volumes:
+  mongo_data:
+
+networks:
+  waveform-net:
+    driver: bridge
