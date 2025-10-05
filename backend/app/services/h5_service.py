@@ -68,13 +68,20 @@ class H5Service:
             processed = self._prepare_waveform(file_path, trial_index)
 
             timestamps = processed["timestamps"]
-            filtered = processed["filtered_values"]
             raw_values = processed["raw_values"]
+            filtered_values = processed["filtered_values"]
 
-            thumbnail = self._generate_thumbnail(
+            # 同步生成原始与滤波缩略图，保持与工作区渲染一致
+            thumbnail_raw = self._generate_thumbnail(
                 timestamps,
-                filtered,
-                target_points=200
+                raw_values,
+                target_points=400
+            )
+
+            thumbnail_filtered = self._generate_thumbnail(
+                timestamps,
+                filtered_values,
+                target_points=400
             )
 
             return {
@@ -83,8 +90,9 @@ class H5Service:
                 "sampleRate": float(processed["sample_rate"]),
                 "dataPoints": int(len(raw_values)),
                 "thumbnail": {
-                    "timestamps": thumbnail['timestamps'].tolist(),
-                    "values": thumbnail['values'].tolist()
+                    "timestamps": thumbnail_raw['timestamps'].tolist(),
+                    "raw": thumbnail_raw['values'].tolist(),
+                    "filtered": thumbnail_filtered['values'].tolist()
                 }
             }
 
@@ -344,47 +352,68 @@ class H5Service:
         values: np.ndarray,
         target_points: int = 100
     ) -> Dict:
-        """生成缩略图 (降采样)"""
-        if len(values) <= target_points:
+        """生成缩略图（LTTB降采样，保留波形关键特征）"""
+        total_points = len(values)
+        if total_points <= target_points or target_points < 3:
             return {
                 "timestamps": timestamps,
                 "values": values
             }
 
-        bucket_size = max(1, len(values) // target_points)
-        selected_indices: List[int] = []
+        # Largest-Triangle-Three-Buckets 算法，保留首末点与每个桶内面积最大的点
+        total_points = int(total_points)
+        bucket_size = (total_points - 2) / (target_points - 2)
+        indices: List[int] = [0]
 
-        for start in range(0, len(values), bucket_size):
-            end = min(start + bucket_size, len(values))
-            segment = values[start:end]
-            if segment.size == 0:
-                continue
+        a = 0
+        for i in range(0, target_points - 2):
+            bucket_start = int(np.floor(i * bucket_size)) + 1
+            bucket_end = int(np.floor((i + 1) * bucket_size)) + 1
+            bucket_end = min(bucket_end, total_points - 1)
 
-            local_min_idx = int(np.argmin(segment)) + start
-            local_max_idx = int(np.argmax(segment)) + start
+            if bucket_start >= bucket_end:
+                bucket_start = min(bucket_start, total_points - 2)
+                bucket_end = bucket_start + 1
 
-            if local_min_idx <= local_max_idx:
-                selected_indices.append(local_min_idx)
-                if local_max_idx != local_min_idx:
-                    selected_indices.append(local_max_idx)
-            else:
-                selected_indices.append(local_max_idx)
-                selected_indices.append(local_min_idx)
+            bucket_slice = slice(bucket_start, bucket_end)
 
-        # 去重并保持顺序
-        seen = set()
-        ordered_indices = []
-        for idx in selected_indices:
-            if idx not in seen:
-                ordered_indices.append(idx)
-                seen.add(idx)
+            next_start = int(np.floor((i + 1) * bucket_size)) + 1
+            next_end = int(np.floor((i + 2) * bucket_size)) + 1
+            if next_start >= total_points:
+                next_start = total_points - 1
+            next_end = min(next_end, total_points)
+            if next_start >= next_end:
+                next_start = total_points - 2
+                next_end = total_points - 1
 
-        ordered_indices = np.array(ordered_indices, dtype=int)
-        ordered_indices = np.clip(ordered_indices, 0, len(values) - 1)
+            avg_range = slice(next_start, next_end)
+            avg_ts = np.mean(timestamps[avg_range])
+            avg_val = np.mean(values[avg_range])
+
+            point_ts = timestamps[bucket_slice]
+            point_vals = values[bucket_slice]
+
+            a_ts = timestamps[a]
+            a_val = values[a]
+
+            # 通过三角形面积甄别最能代表趋势的点
+            area = np.abs(
+                (a_ts - avg_ts) * (point_vals - a_val)
+                - (a_ts - point_ts) * (avg_val - a_val)
+            ) * 0.5
+
+            best_idx_in_bucket = int(np.argmax(area))
+            real_idx = bucket_start + best_idx_in_bucket
+
+            indices.append(real_idx)
+            a = real_idx
+
+        indices.append(total_points - 1)
+        indices = np.array(indices, dtype=int)
 
         return {
-            "timestamps": timestamps[ordered_indices],
-            "values": values[ordered_indices]
+            "timestamps": timestamps[indices],
+            "values": values[indices]
         }
 
 

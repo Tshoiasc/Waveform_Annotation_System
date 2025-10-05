@@ -21,38 +21,57 @@ function Thumbnail({ metadata, width, height }: ThumbnailProps) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const { timestamps, values } = metadata.thumbnail
+    const timestamps = metadata.thumbnail.timestamps ?? []
+    const rawSeries = metadata.thumbnail.raw ?? metadata.thumbnail.values ?? []
+    const filteredSeries = metadata.thumbnail.filtered ?? rawSeries
 
     // 清空画布
     ctx.clearRect(0, 0, width, height)
 
+    if (timestamps.length === 0 || rawSeries.length === 0) {
+      return
+    }
+
+    const pointCount = Math.min(timestamps.length, rawSeries.length, filteredSeries.length)
+    const effectiveTimestamps = timestamps.slice(0, pointCount)
+    const rawValues = rawSeries.slice(0, pointCount)
+    const filteredValues = filteredSeries.slice(0, pointCount)
+
     // 数据范围
-    const xMin = Math.min(...timestamps)
-    const xMax = Math.max(...timestamps)
-    const yMin = Math.min(...values)
-    const yMax = Math.max(...values)
+    const xMin = Math.min(...effectiveTimestamps)
+    const xMax = Math.max(...effectiveTimestamps)
+    const combinedValues = [...rawValues, ...filteredValues]
+    const yMin = Math.min(...combinedValues)
+    const yMax = Math.max(...combinedValues)
+
+    const safeXRange = xMax - xMin || 1
+    const safeYRange = yMax - yMin || 1
 
     // 坐标转换
-    const toX = (t: number) => ((t - xMin) / (xMax - xMin)) * width
-    const toY = (v: number) => height - ((v - yMin) / (yMax - yMin)) * height
+    const toX = (t: number) => ((t - xMin) / safeXRange) * width
+    const toY = (v: number) => height - ((v - yMin) / safeYRange) * height
 
-    // 绘制波形
-    ctx.strokeStyle = '#3b82f6' // blue-500
-    ctx.lineWidth = 1
-    ctx.beginPath()
+    const drawSeries = (series: number[], color: string, lineWidth: number) => {
+      ctx.strokeStyle = color
+      ctx.lineWidth = lineWidth
+      ctx.beginPath()
 
-    timestamps.forEach((t, i) => {
-      const x = toX(t)
-      const y = toY(values[i])
+      effectiveTimestamps.forEach((t, i) => {
+        const x = toX(t)
+        const y = toY(series[i])
 
-      if (i === 0) {
-        ctx.moveTo(x, y)
-      } else {
-        ctx.lineTo(x, y)
-      }
-    })
+        if (i === 0) {
+          ctx.moveTo(x, y)
+        } else {
+          ctx.lineTo(x, y)
+        }
+      })
 
-    ctx.stroke()
+      ctx.stroke()
+    }
+
+    drawSeries(rawValues, 'rgba(159, 159, 159, 0.8)', 0.6)
+    drawSeries(filteredValues, '#d62728', 1.2)
   }, [metadata, width, height])
 
   return (

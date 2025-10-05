@@ -14,7 +14,9 @@ export interface FileInfo {
 // 缩略图数据
 export interface ThumbnailData {
   timestamps: number[]
-  values: number[]
+  raw?: number[]
+  filtered?: number[]
+  values?: number[]
 }
 
 // Trial元数据

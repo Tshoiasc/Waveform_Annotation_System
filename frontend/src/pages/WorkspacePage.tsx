@@ -9,6 +9,7 @@ import { useAnnotationSync } from '../hooks/useAnnotationSync'
 import { useAnnotationShortcuts } from '../hooks/useAnnotationShortcuts'
 import { usePhaseShortcuts } from '../hooks/usePhaseShortcuts'
 import { useWorkspaceStore } from '../store/workspaceStore'
+import { useTemplateStore } from '../store/templateStore'
 
 export default function WorkspacePage() {
   useZoomHistory()
@@ -20,6 +21,16 @@ export default function WorkspacePage() {
   const [workspaceSize, setWorkspaceSize] = useState({ width: 800, height: 600 })
   const [configOpen, setConfigOpen] = useState(false)
   const { files } = useWorkspaceStore((state) => ({ files: state.files }))
+  const { currentTemplateId, templates } = useTemplateStore((state) => ({
+    currentTemplateId: state.currentTemplateId,
+    templates: state.templates,
+  }))
+
+  const currentTemplateName = useMemo(() => {
+    if (!currentTemplateId) return '未选择模板'
+    const template = templates.find((item) => item._id === currentTemplateId)
+    return template ? template.name : '未选择模板'
+  }, [currentTemplateId, templates])
 
   const stats = useMemo(() => {
     const totalFiles = files.length
@@ -115,13 +126,18 @@ export default function WorkspacePage() {
               </span>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => setConfigOpen(true)}
-            className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 transition hover:border-blue-500 hover:text-blue-600"
-          >
-            ⚙️ 配置事件序列
-          </button>
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-gray-600">
+              当前模板：<span className="font-medium text-gray-900">{currentTemplateName}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setConfigOpen(true)}
+              className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 transition hover:border-blue-500 hover:text-blue-600"
+            >
+              ⚙️ 配置事件序列
+            </button>
+          </div>
         </div>
       </header>
 

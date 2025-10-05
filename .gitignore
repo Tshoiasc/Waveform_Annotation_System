@@ -44,4 +44,6 @@ dataset/*.h5
 dataset/
 .serena/
 
+vscode-diagnostics.json
+
 
