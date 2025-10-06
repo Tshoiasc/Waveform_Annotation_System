@@ -4,6 +4,7 @@ import TrialList from '../components/TrialList'
 import WaveformChart from '../components/WaveformChart'
 import AnnotationToolbar from '../components/AnnotationToolbar'
 import TemplateConfigModal from '../components/TemplateConfigModal'
+import SettingsModal from '../components/SettingsModal'
 import { PermissionGate } from '../components/PermissionGate'
 import UserMenu from '../components/UserMenu'
 import AnnotationGuard from '../components/AnnotationGuard'
@@ -14,6 +15,7 @@ import { usePhaseShortcuts } from '../hooks/usePhaseShortcuts'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useTemplateStore } from '../store/templateStore'
 import { useAuthStore } from '../store/authStore'
+import { useSettingsStore } from '../store/settingsStore'
 
 export default function WorkspacePage() {
   useZoomHistory()
@@ -30,6 +32,10 @@ export default function WorkspacePage() {
     templates: state.templates,
   }))
   const canAnnotate = useAuthStore((state) => state.hasPermission('annotations.annotate'))
+  const { isSettingsOpen, closeSettings } = useSettingsStore((s) => ({
+    isSettingsOpen: s.isSettingsOpen,
+    closeSettings: s.closeSettings,
+  }))
 
   const currentTemplateName = useMemo(() => {
     if (!currentTemplateId) return '未选择模板'
@@ -187,6 +193,7 @@ export default function WorkspacePage() {
       </div>
 
       <TemplateConfigModal open={configOpen} onClose={() => setConfigOpen(false)} />
+      <SettingsModal open={isSettingsOpen} onClose={closeSettings} />
     </div>
   )
 }

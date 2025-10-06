@@ -344,9 +344,10 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
         show: false,
       },
       cursor: {
+        // 禁用拖拽缩放，避免标注点击时轻微拖动触发误缩放；保留滚轮缩放
         drag: {
-          x: true,
-          y: true,
+          x: false,
+          y: false,
         },
       },
       plugins: [
@@ -697,17 +698,40 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
         return
       }
 
-      const time = plotInstance.posToVal(xWithin, 'x')
-      if (!Number.isFinite(time)) {
+      const timeAtPointer = plotInstance.posToVal(xWithin, 'x')
+      if (!Number.isFinite(timeAtPointer)) {
         setContextMenu({ visible: false, x: 0, y: 0, eventIndex: null })
         return
       }
 
-      const target = eventsRef.current.find(
-        (evt) => time >= Math.min(evt.startTime, evt.endTime) && time <= Math.max(evt.startTime, evt.endTime)
-      )
+      // 更稳健的事件命中逻辑：
+      // 1) 优先命中时间区间内的事件；
+      // 2) 若区间极窄（像素级），允许在边缘±阈值像素内命中最近的事件。
+      const xScale = plotInstance.scales.x
+      const pxPerUnit = xScale && plotInstance.bbox.width > 0
+        ? plotInstance.bbox.width / Math.max(1e-12, (xScale.max! - xScale.min!))
+        : 1
+      const pxTolerance = 6 // 允许距离边缘 6px 内选中
+      let target: AnnotationEvent | undefined
+      let bestPxDist = Number.POSITIVE_INFINITY
+      for (const evt of eventsRef.current) {
+        const a = Math.min(evt.startTime, evt.endTime)
+        const b = Math.max(evt.startTime, evt.endTime)
+        if (timeAtPointer >= a && timeAtPointer <= b) {
+          target = evt
+          bestPxDist = 0
+          break
+        }
+        // 计算指针时间距离事件区间边缘的像素距离
+        const tDist = timeAtPointer < a ? a - timeAtPointer : timeAtPointer - b
+        const pxDist = tDist * pxPerUnit
+        if (pxDist < bestPxDist) {
+          bestPxDist = pxDist
+          target = evt
+        }
+      }
 
-      if (!target) {
+      if (!target || bestPxDist > pxTolerance) {
         setContextMenu({ visible: false, x: 0, y: 0, eventIndex: null })
         return
       }
@@ -770,7 +794,8 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     const widthRange = currentZoom.xMax - currentZoom.xMin
     if (widthRange <= 0) return
 
-    const margin = widthRange * 0.25
+    // 自动向后平移：将触发阈值从 25% 提高到 35%，让平移更早触发
+    const margin = widthRange * 0.35
     if (latestSegment.endTime <= currentZoom.xMax - margin) return
 
     const waveformData = waveformRef.current
@@ -779,7 +804,8 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     const dataMin = waveformData.raw.timestamps[0]
     const dataMax = waveformData.raw.timestamps[waveformData.raw.timestamps.length - 1]
 
-    const desiredMax = Math.min(latestSegment.endTime + widthRange * 0.15, dataMax)
+    // 将右侧留白从 15% 提高到 35%，平移幅度更大、减少频繁手动移动
+    const desiredMax = Math.min(latestSegment.endTime + widthRange * 0.35, dataMax)
     let desiredMin = Math.max(desiredMax - widthRange, dataMin)
     let desiredXMax = desiredMin + widthRange
 
