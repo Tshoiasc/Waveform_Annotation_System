@@ -4,6 +4,7 @@ import 'uplot/dist/uPlot.min.css'
 import { useWaveformStore } from '../store/waveformStore'
 import { useAnnotationStore } from '../store/annotationStore'
 import { useWorkspaceStore } from '../store/workspaceStore'
+import { useSettingsStore } from '../store/settingsStore'
 import type { AnnotationEvent, AnnotationPhase, AnnotationSegment } from '../types/waveform'
 
 interface WaveformChartProps {
@@ -155,6 +156,13 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
   const [eventLabels, setEventLabels] = useState<EventLabel[]>([])
   const [cursorValues, setCursorValues] = useState<CursorValues>({ raw: null, filtered: null })
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, eventIndex: null })
+
+  // 读取自动平移设置（Zustand）
+  const { autoPanEnabled, autoPanTriggerThreshold, autoPanRightPadding } = useSettingsStore((s) => ({
+    autoPanEnabled: s.autoPanEnabled,
+    autoPanTriggerThreshold: s.autoPanTriggerThreshold,
+    autoPanRightPadding: s.autoPanRightPadding,
+  }))
 
   const annotationsRef = useRef<AnnotationSegment[]>(annotations)
   const eventsRef = useRef<AnnotationEvent[]>(events)
@@ -308,10 +316,14 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       width,
       height,
       scales: {
+        // 关闭自动缩放，由我们通过 store 统一控制范围
         x: {
           time: false,
+          auto: false,
         },
-        y: {},
+        y: {
+          auto: false,
+        },
       },
       axes: [
         {
@@ -503,6 +515,8 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                   return
                 }
                 if (key !== 'x' && key !== 'y') return
+                // 保险：忽略一切非滚轮产生的 y 轴 setScale 回调，避免意外写回 store
+                if (key === 'y') return
 
                 const xScale = u.scales.x
                 const yScale = u.scales.y
@@ -794,8 +808,14 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     const widthRange = currentZoom.xMax - currentZoom.xMin
     if (widthRange <= 0) return
 
-    // 自动向后平移：将触发阈值从 25% 提高到 35%，让平移更早触发
-    const margin = widthRange * 0.35
+    // 若关闭自动平移，则直接返回
+    if (!autoPanEnabled) return
+
+    // 自动向后平移：基于设置的触发阈值（比例 0~1）
+    const triggerRatio = Number.isFinite(autoPanTriggerThreshold)
+      ? Math.max(0, Math.min(0.95, autoPanTriggerThreshold))
+      : 0.25
+    const margin = widthRange * triggerRatio
     if (latestSegment.endTime <= currentZoom.xMax - margin) return
 
     const waveformData = waveformRef.current
@@ -804,8 +824,11 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     const dataMin = waveformData.raw.timestamps[0]
     const dataMax = waveformData.raw.timestamps[waveformData.raw.timestamps.length - 1]
 
-    // 将右侧留白从 15% 提高到 35%，平移幅度更大、减少频繁手动移动
-    const desiredMax = Math.min(latestSegment.endTime + widthRange * 0.35, dataMax)
+    // 右侧留白比例基于设置（0~1）
+    const rightPadRatio = Number.isFinite(autoPanRightPadding)
+      ? Math.max(0, Math.min(0.95, autoPanRightPadding))
+      : 0.65
+    const desiredMax = Math.min(latestSegment.endTime + widthRange * rightPadRatio, dataMax)
     let desiredMin = Math.max(desiredMax - widthRange, dataMin)
     let desiredXMax = desiredMin + widthRange
 
@@ -821,7 +844,7 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       yMax: currentZoom.yMax,
       timestamp: Date.now(),
     })
-  }, [annotations, currentZoom, setZoom])
+  }, [annotations, currentZoom, setZoom, autoPanEnabled, autoPanTriggerThreshold, autoPanRightPadding])
 
   useEffect(() => {
     const handleWheel = (e: WheelEvent) => {
@@ -831,7 +854,9 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       const currentZoomState = useWaveformStore.getState().currentZoom
       if (!plot || !currentZoomState) return
 
-      const { deltaY, deltaX, shiftKey, metaKey, ctrlKey } = e
+      const { deltaY, deltaX, shiftKey, metaKey, ctrlKey, deltaMode } = e
+      // 恢复：默认同时缩放XY；按Shift仅Y；按Ctrl/Meta仅X。
+      // 结合 auto:false 与 setScale 钩子防抖/过滤，避免点击引发Y意外变化。
       const zoomMode: 'x' | 'y' | 'xy' = metaKey || ctrlKey ? 'x' : shiftKey ? 'y' : 'xy'
       lastWheelTsRef.current = Date.now()
       lastWheelModeRef.current = zoomMode
@@ -841,7 +866,21 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
         axisDelta = deltaX
       }
 
-      if (axisDelta === 0) return
+      // 针对触控板/轻微抖动：加入最小阈值，避免“点击时轻微滚动”触发缩放
+      // deltaMode: 0=像素，1=行，2=页。这里按像素近似阈值处理。
+      const MIN_WHEEL_DELTA = 2
+      const absDelta = Math.abs(axisDelta)
+      if (axisDelta === 0 || absDelta < MIN_WHEEL_DELTA) {
+        if (DEBUG_ZOOM) {
+          console.debug('[waveform][wheel] ignored (below threshold)', {
+            deltaX,
+            deltaY,
+            deltaMode,
+            absDelta,
+          })
+        }
+        return
+      }
 
       const overRect = plot.over.getBoundingClientRect()
       const xWithinOver = e.clientX - overRect.left

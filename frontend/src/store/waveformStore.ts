@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { WaveformResponse, ZoomState } from '../types/waveform'
 import fileService from '../services/fileService'
+import { useSettingsStore } from './settingsStore'
 
 interface WaveformState {
   // 波形数据
@@ -39,12 +40,65 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
     try {
       const waveform = await fileService.getWaveform(fileId, trialIndex)
 
-      // 初始化缩放状态 (显示全部数据)
+      // 从设置中读取默认缩放倍数（>1 表示放大）
+      const { defaultZoomX, defaultZoomY } = useSettingsStore.getState()
+
+      // 计算原始范围（全量）
+      const xMinAll = Math.min(...waveform.raw.timestamps)
+      const xMaxAll = Math.max(...waveform.raw.timestamps)
+      const yMinAll = Math.min(...waveform.raw.values)
+      const yMaxAll = Math.max(...waveform.raw.values)
+
+      const xRangeAll = xMaxAll - xMinAll || 1
+      const yRangeAll = yMaxAll - yMinAll || 1
+
+      // X 轴：从最左侧开始，根据倍率裁剪；倍率<=1 时显示全范围
+      // Y 轴：仍按中位点对称裁剪；倍率<=1 时显示全范围
+      const yCenter = (yMinAll + yMaxAll) / 2
+
+      const targetXRange = defaultZoomX > 1 ? xRangeAll / defaultZoomX : xRangeAll
+      const targetYRange = defaultZoomY > 1 ? yRangeAll / defaultZoomY : yRangeAll
+
+      let xMinInit = xMinAll
+      let xMaxInit = xMinAll + targetXRange
+      let yMinInit = yCenter - targetYRange / 2
+      let yMaxInit = yCenter + targetYRange / 2
+
+      // 边界校正，避免超出全量范围；若倍率导致范围大于全量，回退为全量范围
+      // X 轴边界校正：从左起始，最多到全量最大
+      if (xMaxInit - xMinInit > xRangeAll) {
+        xMinInit = xMinAll
+        xMaxInit = xMaxAll
+      } else {
+        if (xMinInit < xMinAll) {
+          xMinInit = xMinAll
+          xMaxInit = xMinAll + targetXRange
+        }
+        if (xMaxInit > xMaxAll) {
+          xMaxInit = xMaxAll
+          xMinInit = xMaxAll - targetXRange
+        }
+      }
+
+      if (yMaxInit - yMinInit > yRangeAll) {
+        yMinInit = yMinAll
+        yMaxInit = yMaxAll
+      } else {
+        if (yMinInit < yMinAll) {
+          yMinInit = yMinAll
+          yMaxInit = yMinAll + targetYRange
+        }
+        if (yMaxInit > yMaxAll) {
+          yMaxInit = yMaxAll
+          yMinInit = yMaxAll - targetYRange
+        }
+      }
+
       const initialZoom: ZoomState = {
-        xMin: Math.min(...waveform.raw.timestamps),
-        xMax: Math.max(...waveform.raw.timestamps),
-        yMin: Math.min(...waveform.raw.values),
-        yMax: Math.max(...waveform.raw.values),
+        xMin: xMinInit,
+        xMax: xMaxInit,
+        yMin: yMinInit,
+        yMax: yMaxInit,
         timestamp: Date.now(),
       }
 

@@ -663,10 +663,17 @@ export const useAnnotationStore = create<AnnotationState>()(
         set((state) => {
           const filtered = state.annotations.filter((ann) => ann.eventIndex !== eventIndex)
           const unsynced = markSegmentsUnsynced(filtered)
+          const events = buildEventsFromSegments(unsynced)
+          const nextEventIndex = unsynced.reduce((max, ann) => Math.max(max, ann.eventIndex), -1) + 1
           persistDraftSegments(reference.fileId, reference.trialIndex, unsynced)
           return {
             annotations: unsynced,
-            events: buildEventsFromSegments(unsynced),
+            events,
+            isAnnotating: true,
+            pendingBoundary: null,
+            eventStartBoundary: null,
+            currentPhaseIndex: 0,
+            currentEventIndex: nextEventIndex,
             annotationsError: null,
             isOwner: true,
           }
