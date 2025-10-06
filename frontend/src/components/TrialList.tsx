@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import type { MouseEvent } from 'react'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useWaveformStore } from '../store/waveformStore'
+import { useAuthStore } from '../store/authStore'
 import type { TrialMetadata } from '../types/waveform'
 
 interface ThumbnailProps {
@@ -104,6 +105,7 @@ export default function TrialList() {
   }))
 
   const loadWaveform = useWaveformStore((state) => state.loadWaveform)
+  const canAnnotate = useAuthStore((state) => state.hasPermission('annotations.annotate'))
 
   // 处理Trial选择
   const handleTrialClick = (trial: TrialMetadata) => {
@@ -217,6 +219,9 @@ export default function TrialList() {
 
                 const handleToggleClick = async (event: MouseEvent<HTMLButtonElement>) => {
                   event.stopPropagation()
+                  if (!canAnnotate) {
+                    return
+                  }
                   if (!selectedFile) return
                   try {
                     await updateTrialFinished(selectedFile.fileId, trial.trialIndex, !isFinished)
@@ -258,7 +263,9 @@ export default function TrialList() {
                         <button
                           type="button"
                           onClick={handleToggleClick}
-                          className={`rounded px-2 py-1 text-[11px] font-medium transition border ${
+                          disabled={!canAnnotate}
+                          title={canAnnotate ? undefined : '当前账号缺少标注权限，无法修改Trial状态'}
+                          className={`rounded px-2 py-1 text-[11px] font-medium transition border disabled:cursor-not-allowed disabled:opacity-50 disabled:border-gray-200 disabled:text-gray-400 disabled:bg-gray-100 disabled:hover:bg-gray-100 disabled:hover:text-gray-400 ${
                             isFinished
                               ? 'border-gray-300 text-gray-500 hover:bg-gray-100'
                               : 'border-blue-500 text-blue-600 hover:bg-blue-50'

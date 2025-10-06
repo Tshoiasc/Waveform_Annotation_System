@@ -21,13 +21,8 @@ export interface EventTemplate {
 const BASE_URL = '/api/templates'
 
 const templateService = {
-  async getTemplates(scope?: 'global' | 'private', userId?: string): Promise<EventTemplate[]> {
-    const params = new URLSearchParams()
-    if (scope) params.append('scope', scope)
-    if (userId) params.append('userId', userId)
-
-    const query = params.toString()
-    const response = await apiClient.get(query ? `${BASE_URL}?${query}` : BASE_URL)
+  async getTemplates(): Promise<EventTemplate[]> {
+    const response = await apiClient.get(BASE_URL)
     if (!response.ok) {
       throw new Error('获取模板列表失败')
     }
@@ -43,11 +38,9 @@ const templateService = {
   },
 
   async createTemplate(
-    data: { name: string; isGlobal: boolean; phases: Phase[] },
-    userId?: string
+    data: { name: string; phases: Phase[] }
   ): Promise<EventTemplate> {
-    const params = userId ? `?userId=${userId}` : ''
-    const response = await apiClient.post(`${BASE_URL}${params}`, data)
+    const response = await apiClient.post(BASE_URL, data)
     if (!response.ok) {
       throw new Error('创建模板失败')
     }

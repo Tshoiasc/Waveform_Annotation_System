@@ -37,6 +37,12 @@ class UserRepository:
 
     async def create(self, user_data: Dict[str, Any]) -> str:
         password = user_data.pop("password")
+
+        # 过滤掉值为 None 的字段，避免写入导致唯一索引冲突
+        user_data = {
+            key: value for key, value in user_data.items() if value is not None
+        }
+
         user_data["password_hash"] = bcrypt.hashpw(
             password.encode(),
             bcrypt.gensalt(),

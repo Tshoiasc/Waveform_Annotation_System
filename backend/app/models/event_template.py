@@ -25,36 +25,50 @@ class PhaseSchema(BaseModel):
         return v
 
 
+def _validate_phases(phases: List[PhaseSchema]) -> List[PhaseSchema]:
+    """确保阶段列表合法，快捷键不重复"""
+
+    if len(phases) == 0:
+        raise ValueError('Template must have at least one phase')
+
+    shortcuts = [phase.shortcut for phase in phases]
+    if len(shortcuts) != len(set(shortcuts)):
+        raise ValueError('Phase shortcuts must be unique')
+
+    return phases
+
+
 class EventTemplateModel(BaseModel):
     """事件序列模板"""
     name: str
-    isGlobal: bool = Field(default=False, description="是否为全局模板")
-    createdBy: Optional[str] = Field(default=None, description="创建者用户ID")
+    isGlobal: bool = Field(default=True, description="标记为全局模板")
+    createdBy: Optional[str] = Field(default=None, description="创建者用户ID（全局模板恒为None）")
     phases: List[PhaseSchema]
     createdAt: datetime = Field(default_factory=datetime.now)
     updatedAt: datetime = Field(default_factory=datetime.now)
 
     @validator('phases')
     def validate_phases(cls, v):
-        if len(v) == 0:
-            raise ValueError('Template must have at least one phase')
-
-        # Check shortcut uniqueness
-        shortcuts = [phase.shortcut for phase in v]
-        if len(shortcuts) != len(set(shortcuts)):
-            raise ValueError('Phase shortcuts must be unique')
-
-        return v
+        return _validate_phases(v)
 
 
 class EventTemplateCreate(BaseModel):
     """创建模板请求"""
     name: str
-    isGlobal: bool = False
     phases: List[PhaseSchema]
+
+    @validator('phases')
+    def validate_phases(cls, v):
+        return _validate_phases(v)
 
 
 class EventTemplateUpdate(BaseModel):
     """更新模板请求"""
     name: Optional[str] = None
     phases: Optional[List[PhaseSchema]] = None
+
+    @validator('phases')
+    def validate_phases(cls, v):
+        if v is None:
+            return v
+        return _validate_phases(v)

@@ -1,31 +1,34 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.db import get_database
 from app.db.repositories.template_repo import TemplateRepository
 from app.models.event_template import EventTemplateCreate, EventTemplateUpdate
-from typing import List, Dict, Optional
+from app.utils.permissions import require_permission
+from typing import List, Dict
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
 
 @router.get("")
+@require_permission("templates.view")
 async def list_templates(
-    scope: Optional[str] = Query(None, description="global | private"),
-    userId: Optional[str] = Query(None, description="用户ID"),
+    request: Request,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ) -> List[Dict]:
     """获取模板列表"""
     try:
         repo = TemplateRepository(db)
-        templates = await repo.find_all(scope=scope, user_id=userId)
+        templates = await repo.find_all()
         return templates
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
 
 
 @router.get("/{template_id}")
+@require_permission("templates.view")
 async def get_template(
     template_id: str,
+    request: Request,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ) -> Dict:
     """获取单个模板"""
@@ -44,9 +47,10 @@ async def get_template(
 
 
 @router.post("")
+@require_permission("templates.create")
 async def create_template(
     template: EventTemplateCreate,
-    userId: Optional[str] = Query(None, description="创建者用户ID"),
+    request: Request,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ) -> Dict:
     """创建模板"""
@@ -54,9 +58,8 @@ async def create_template(
         repo = TemplateRepository(db)
         
         # Convert Pydantic model to dict
-        template_data = template.dict()
-        template_data['createdBy'] = userId
-        
+        template_data = template.model_dump()
+
         template_id = await repo.insert_one(template_data)
         created = await repo.find_by_id(template_id)
         
@@ -71,9 +74,11 @@ async def create_template(
 
 
 @router.put("/{template_id}")
+@require_permission("templates.update")
 async def update_template(
     template_id: str,
     updates: EventTemplateUpdate,
+    request: Request,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ) -> Dict:
     """更新模板"""
@@ -81,7 +86,7 @@ async def update_template(
         repo = TemplateRepository(db)
         
         # Only update provided fields
-        update_data = {k: v for k, v in updates.dict().items() if v is not None}
+        update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
         
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
@@ -100,8 +105,10 @@ async def update_template(
 
 
 @router.delete("/{template_id}")
+@require_permission("templates.delete")
 async def delete_template(
     template_id: str,
+    request: Request,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ) -> Dict:
     """删除模板"""

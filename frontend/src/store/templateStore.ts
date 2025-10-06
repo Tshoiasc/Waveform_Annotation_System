@@ -10,10 +10,10 @@ interface TemplateState {
   error: string | null
 
   // Actions
-  fetchTemplates: (scope?: 'global' | 'private', userId?: string) => Promise<void>
+  fetchTemplates: () => Promise<void>
   selectTemplate: (id: string) => Promise<void>
-  createTemplate: (data: { name: string; isGlobal: boolean; phases: Phase[] }, userId?: string) => Promise<void>
-  updateTemplate: (id: string, data: { name?: string; phases?: Phase[] }) => Promise<void>
+  createTemplate: (data: { name: string; phases: Phase[] }) => Promise<EventTemplate>
+  updateTemplate: (id: string, data: { name?: string; phases?: Phase[] }) => Promise<EventTemplate>
   deleteTemplate: (id: string) => Promise<void>
   applyTemplate: (templateId: string) => void
   clearError: () => void
@@ -27,10 +27,10 @@ export const useTemplateStore = create<TemplateState>()(
       loading: false,
       error: null,
 
-      fetchTemplates: async (scope, userId) => {
+      fetchTemplates: async () => {
         set({ loading: true, error: null })
         try {
-          const templates = await templateService.getTemplates(scope, userId)
+          const templates = await templateService.getTemplates()
           set({ templates, loading: false })
         } catch (error) {
           console.error('Failed to fetch templates:', error)
@@ -59,21 +59,21 @@ export const useTemplateStore = create<TemplateState>()(
         }
       },
 
-      createTemplate: async (data, userId) => {
+      createTemplate: async (data) => {
         set({ loading: true, error: null })
         try {
-          const newTemplate = await templateService.createTemplate(data, userId)
+          const newTemplate = await templateService.createTemplate(data)
           set(state => ({
             templates: [...state.templates, newTemplate],
             currentTemplateId: newTemplate._id,
             loading: false
           }))
+          return newTemplate
         } catch (error) {
           console.error('Failed to create template:', error)
-          set({
-            loading: false,
-            error: error instanceof Error ? error.message : 'Failed to create template'
-          })
+          const message = error instanceof Error ? error.message : 'Failed to create template'
+          set({ loading: false, error: message })
+          throw error instanceof Error ? error : new Error(message)
         }
       },
 
@@ -85,12 +85,12 @@ export const useTemplateStore = create<TemplateState>()(
             templates: state.templates.map(t => t._id === id ? updated : t),
             loading: false
           }))
+          return updated
         } catch (error) {
           console.error('Failed to update template:', error)
-          set({
-            loading: false,
-            error: error instanceof Error ? error.message : 'Failed to update template'
-          })
+          const message = error instanceof Error ? error.message : 'Failed to update template'
+          set({ loading: false, error: message })
+          throw error instanceof Error ? error : new Error(message)
         }
       },
 

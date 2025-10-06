@@ -1,7 +1,5 @@
 import type { AnnotationPhase } from './waveform'
 
-export type TemplateScope = 'global' | 'private'
-
 export interface TemplatePhase extends AnnotationPhase {
   shortcut?: string
   order: number
@@ -19,6 +17,5 @@ export interface EventTemplate {
 
 export interface TemplatePayload {
   name: string
-  isGlobal: boolean
   phases: TemplatePhase[]
 }

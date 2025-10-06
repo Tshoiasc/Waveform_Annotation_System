@@ -14,10 +14,16 @@ const PREDEFINED_PHASES: PhaseItem[] = [
   { id: 'ringdown', name: 'Ringdown', color: '#facc15' },
 ]
 
-function DraggablePhaseItem({ phase }: { phase: PhaseItem }) {
+interface DraggablePhaseItemProps {
+  phase: PhaseItem
+  disabled?: boolean
+}
+
+function DraggablePhaseItem({ phase, disabled = false }: DraggablePhaseItemProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `library-${phase.id}`,
-    data: { type: 'library-phase', phase }
+    data: { type: 'library-phase', phase },
+    disabled
   })
 
   const style = {
@@ -29,9 +35,11 @@ function DraggablePhaseItem({ phase }: { phase: PhaseItem }) {
     <div
       ref={setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
-      className="flex items-center gap-2 px-3 py-2 rounded-md border border-gray-200 bg-white cursor-grab hover:shadow-md transition-shadow"
+      {...(disabled ? {} : attributes)}
+      {...(disabled ? {} : listeners)}
+      className={`flex items-center gap-2 px-3 py-2 rounded-md border border-gray-200 bg-white transition-shadow ${
+        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-grab hover:shadow-md'
+      }`}
     >
       <span
         className="inline-block w-3 h-3 rounded-full"
@@ -42,21 +50,32 @@ function DraggablePhaseItem({ phase }: { phase: PhaseItem }) {
   )
 }
 
-export default function PhaseLibrary() {
+interface PhaseLibraryProps {
+  disabled?: boolean
+}
+
+export default function PhaseLibrary({ disabled = false }: PhaseLibraryProps) {
   return (
     <div className="space-y-3">
       <h3 className="text-sm font-semibold text-gray-700">阶段库</h3>
-      <p className="text-xs text-gray-500">拖拽阶段到右侧序列中</p>
+      <p className="text-xs text-gray-500">
+        {disabled ? '暂无阶段拖拽权限，请联系管理员。' : '拖拽阶段到右侧序列中'}
+      </p>
       
       <div className="grid grid-cols-2 gap-2">
         {PREDEFINED_PHASES.map((phase) => (
-          <DraggablePhaseItem key={phase.id} phase={phase} />
+          <DraggablePhaseItem key={phase.id} phase={phase} disabled={disabled} />
         ))}
       </div>
 
       <button
         type="button"
-        className="w-full px-3 py-2 text-sm text-gray-600 border border-dashed border-gray-300 rounded-md hover:border-gray-400 hover:text-gray-800 transition-colors"
+        disabled={disabled}
+        className={`w-full px-3 py-2 text-sm border border-dashed rounded-md transition-colors ${
+          disabled
+            ? 'text-gray-400 border-gray-200 cursor-not-allowed'
+            : 'text-gray-600 border-gray-300 hover:border-gray-400 hover:text-gray-800'
+        }`}
       >
         + 新建自定义阶段
       </button>

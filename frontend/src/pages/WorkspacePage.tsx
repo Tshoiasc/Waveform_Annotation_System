@@ -4,13 +4,16 @@ import TrialList from '../components/TrialList'
 import WaveformChart from '../components/WaveformChart'
 import AnnotationToolbar from '../components/AnnotationToolbar'
 import TemplateConfigModal from '../components/TemplateConfigModal'
+import { PermissionGate } from '../components/PermissionGate'
 import UserMenu from '../components/UserMenu'
+import AnnotationGuard from '../components/AnnotationGuard'
 import { useZoomHistory } from '../hooks/useZoomHistory'
 import { useAnnotationSync } from '../hooks/useAnnotationSync'
 import { useAnnotationShortcuts } from '../hooks/useAnnotationShortcuts'
 import { usePhaseShortcuts } from '../hooks/usePhaseShortcuts'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useTemplateStore } from '../store/templateStore'
+import { useAuthStore } from '../store/authStore'
 
 export default function WorkspacePage() {
   useZoomHistory()
@@ -26,6 +29,7 @@ export default function WorkspacePage() {
     currentTemplateId: state.currentTemplateId,
     templates: state.templates,
   }))
+  const canAnnotate = useAuthStore((state) => state.hasPermission('annotations.annotate'))
 
   const currentTemplateName = useMemo(() => {
     if (!currentTemplateId) return '未选择模板'
@@ -131,13 +135,15 @@ export default function WorkspacePage() {
             <div className="text-sm text-gray-600">
               当前模板：<span className="font-medium text-gray-900">{currentTemplateName}</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setConfigOpen(true)}
-              className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 transition hover:border-blue-500 hover:text-blue-600"
-            >
-              ⚙️ 配置事件序列
-            </button>
+            <PermissionGate permission="templates.view">
+              <button
+                type="button"
+                onClick={() => setConfigOpen(true)}
+                className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 transition hover:border-blue-500 hover:text-blue-600"
+              >
+                ⚙️ 配置事件序列
+              </button>
+            </PermissionGate>
             <UserMenu />
           </div>
         </div>
@@ -160,13 +166,22 @@ export default function WorkspacePage() {
             </div>
           </div>
 
-          <AnnotationToolbar />
+          <AnnotationGuard>
+            <AnnotationToolbar />
+          </AnnotationGuard>
 
           <div ref={workspaceRef} className="min-h-0 flex-1 overflow-hidden p-4">
-            <WaveformChart
-              width={Math.max(workspaceSize.width - 32, 0)}
-              height={Math.max(workspaceSize.height - 32, 0)}
-            />
+            <div className="relative h-full w-full">
+              <WaveformChart
+                width={Math.max(workspaceSize.width - 32, 0)}
+                height={Math.max(workspaceSize.height - 32, 0)}
+              />
+              {!canAnnotate && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/70 text-sm font-medium text-gray-600">
+                  标注功能已锁定，拥有权限后可进行编辑
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
