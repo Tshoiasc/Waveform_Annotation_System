@@ -35,6 +35,9 @@ interface ContextMenuState {
   eventIndex: number | null
 }
 
+// 调试开关：为缩放与坐标计算打印详细日志
+const DEBUG_ZOOM = true
+
 function applyAlpha(color: string | undefined, alpha: number) {
   if (!color) {
     return `rgba(59, 130, 246, ${alpha})`
@@ -130,6 +133,8 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     events,
     isAnnotating,
     handleBoundaryClick,
+    isOwner,
+    ensureEditableViaDraft,
     phases,
     pendingBoundary,
     currentPhaseIndex,
@@ -139,6 +144,8 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     events: state.events,
     isAnnotating: state.isAnnotating,
     handleBoundaryClick: state.handleBoundaryClick,
+    isOwner: state.isOwner,
+    ensureEditableViaDraft: state.ensureEditableViaDraft,
     phases: state.phases,
     pendingBoundary: state.pendingBoundary,
     currentPhaseIndex: state.currentPhaseIndex,
@@ -153,6 +160,8 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
   const eventsRef = useRef<AnnotationEvent[]>(events)
   const isAnnotatingRef = useRef(isAnnotating)
   const handleBoundaryClickRef = useRef(handleBoundaryClick)
+  const isOwnerRef = useRef(isOwner)
+  const ensureEditableRef = useRef(ensureEditableViaDraft)
   const selectedFileRef = useRef(selectedFile)
   const selectedTrialRef = useRef(selectedTrial)
   const phasesRef = useRef(phases)
@@ -162,6 +171,30 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
   const currentPhaseIndexRef = useRef(currentPhaseIndex)
   const deleteEventRef = useRef(deleteEvent)
   const prevAnnotationCountRef = useRef(annotations.length)
+  const isProgrammaticScaleRef = useRef(false)
+  const lastWheelTsRef = useRef<number>(0)
+  const lastWheelModeRef = useRef<'x' | 'y' | 'xy' | null>(null)
+
+  const applyScale = (plot: uPlot, ranges: { x?: { min: number; max: number }; y?: { min: number; max: number } }) => {
+    isProgrammaticScaleRef.current = true
+    try {
+      if (DEBUG_ZOOM) {
+        // 打印将要生效的范围
+        console.debug('[waveform][applyScale] incoming', {
+          x: ranges.x,
+          y: ranges.y,
+        })
+      }
+      if (ranges.x) {
+        plot.setScale('x', ranges.x)
+      }
+      if (ranges.y) {
+        plot.setScale('y', ranges.y)
+      }
+    } finally {
+      isProgrammaticScaleRef.current = false
+    }
+  }
 
   useEffect(() => {
     annotationsRef.current = annotations
@@ -178,6 +211,14 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
   useEffect(() => {
     handleBoundaryClickRef.current = handleBoundaryClick
   }, [handleBoundaryClick])
+
+  useEffect(() => {
+    isOwnerRef.current = isOwner
+  }, [isOwner])
+
+  useEffect(() => {
+    ensureEditableRef.current = ensureEditableViaDraft
+  }, [ensureEditableViaDraft])
 
   useEffect(() => {
     selectedFileRef.current = selectedFile
@@ -269,11 +310,8 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       scales: {
         x: {
           time: false,
-          range: [currentZoom.xMin, currentZoom.xMax],
         },
-        y: {
-          range: [currentZoom.yMin, currentZoom.yMax],
-        },
+        y: {},
       },
       axes: [
         {
@@ -395,6 +433,23 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                   }
                 }
 
+                // 调试：在图左上角绘制当前 x/y 缩放范围
+                if (DEBUG_ZOOM) {
+                  const xs = u.scales.x
+                  const ys = u.scales.y
+                  ctx.save()
+                  ctx.fillStyle = 'rgba(0,0,0,0.6)'
+                  ctx.font = '12px sans-serif'
+                  ctx.textAlign = 'left'
+                  ctx.textBaseline = 'top'
+                  const pad = 6
+                  const text1 = `x:[${(xs?.min ?? NaN).toFixed(3)}, ${(xs?.max ?? NaN).toFixed(3)}]`
+                  const text2 = `y:[${(ys?.min ?? NaN).toFixed(3)}, ${(ys?.max ?? NaN).toFixed(3)}]`
+                  ctx.fillText(text1, u.bbox.left + pad, u.bbox.top + pad)
+                  ctx.fillText(text2, u.bbox.left + pad, u.bbox.top + pad + 14)
+                  ctx.restore()
+                }
+
                 if (isAnnotatingNow && pending && hover && hover.time > pending.time) {
                   const startX = u.valToPos(pending.time, 'x', true)
                   const endX = u.valToPos(hover.time, 'x', true)
@@ -430,6 +485,72 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                 setCursorValues({ raw, filtered })
               },
             ],
+            setScale: [
+              (u, key) => {
+                if (isProgrammaticScaleRef.current) return
+                // 避免在滚轮缩放后，uPlot 内部的 setScale 通知回流覆盖我们在滚轮中计算的范围
+                // 这里对极近的回调进行忽略（同时不影响拖拽缩放）
+                const now = Date.now()
+                if (now - lastWheelTsRef.current < 80) {
+                  if (DEBUG_ZOOM) {
+                    console.debug('[waveform][hook setScale] ignored due to recent wheel', {
+                      key,
+                      lastWheelMode: lastWheelModeRef.current,
+                      elapsed: now - lastWheelTsRef.current,
+                    })
+                  }
+                  return
+                }
+                if (key !== 'x' && key !== 'y') return
+
+                const xScale = u.scales.x
+                const yScale = u.scales.y
+                if (!xScale || !yScale) return
+
+                const { min: xMin, max: xMax } = xScale
+                const { min: yMin, max: yMax } = yScale
+
+                if (DEBUG_ZOOM) {
+                  console.debug('[waveform][hook setScale] user change', {
+                    key,
+                    xMin,
+                    xMax,
+                    yMin,
+                    yMax,
+                  })
+                }
+
+                if (
+                  xMin == null || xMax == null || yMin == null || yMax == null ||
+                  !Number.isFinite(xMin) || !Number.isFinite(xMax) ||
+                  !Number.isFinite(yMin) || !Number.isFinite(yMax)
+                ) {
+                  return
+                }
+
+                const waveformStore = useWaveformStore.getState()
+                const currentZoomState = waveformStore.currentZoom
+                const nextZoom = {
+                  xMin,
+                  xMax,
+                  yMin,
+                  yMax,
+                  timestamp: Date.now(),
+                }
+
+                if (
+                  currentZoomState &&
+                  Math.abs(currentZoomState.xMin - nextZoom.xMin) < 1e-9 &&
+                  Math.abs(currentZoomState.xMax - nextZoom.xMax) < 1e-9 &&
+                  Math.abs(currentZoomState.yMin - nextZoom.yMin) < 1e-9 &&
+                  Math.abs(currentZoomState.yMax - nextZoom.yMax) < 1e-9
+                ) {
+                  return
+                }
+
+                waveformStore.setZoom(nextZoom)
+              },
+            ],
           },
         },
       ],
@@ -450,12 +571,18 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     }
     uplotRef.current = plot
 
+    // 初始化后用编程方式设置初始缩放，避免 options.range 与后续 setScale 互相覆盖
+    applyScale(plot, {
+      x: { min: currentZoom.xMin, max: currentZoom.xMax },
+      y: { min: currentZoom.yMin, max: currentZoom.yMax },
+    })
+
     setEventLabels((prev) => {
       const labels = computeEventLabels(plot, eventsRef.current)
       return areEventLabelsEqual(prev, labels) ? prev : labels
     })
 
-    const handlePlotClick = (event: MouseEvent) => {
+    const handlePlotClick = async (event: MouseEvent) => {
       if (event.button !== 0) return
       console.debug('[waveform] plot click', { button: event.button })
       if (!isAnnotatingRef.current) {
@@ -487,6 +614,18 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
         timestamp,
         timeAtPointer: plot.posToVal(xWithin, 'x'),
       })
+
+      // 只读场景：弹出确认，选择“是”则将当前版本下载为草稿并继续本次点击
+      if (!isOwnerRef.current) {
+        const ok = window.confirm('当前为他人版本，是否下载到我的草稿箱并进行编辑？')
+        if (!ok) return
+        try {
+          await ensureEditableRef.current()
+        } catch (e) {
+          console.error('ensureEditableViaDraft failed', e)
+          return
+        }
+      }
 
       void handleBoundaryClickRef.current({
         fileId: currentFile.fileId,
@@ -599,14 +738,19 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       plot.destroy()
       uplotRef.current = null
     }
-  }, [waveform, width, height, currentZoom])
+  }, [waveform, width, height])
 
   useEffect(() => {
     const plot = uplotRef.current
     if (!plot || !currentZoom) return
 
-    plot.setScale('x', { min: currentZoom.xMin, max: currentZoom.xMax })
-    plot.setScale('y', { min: currentZoom.yMin, max: currentZoom.yMax })
+    applyScale(plot, {
+      x: { min: currentZoom.xMin, max: currentZoom.xMax },
+      y: { min: currentZoom.yMin, max: currentZoom.yMax },
+    })
+    if (DEBUG_ZOOM) {
+      console.debug('[waveform][effect currentZoom->applyScale]', currentZoom)
+    }
     const labels = computeEventLabels(plot, eventsRef.current)
     setEventLabels((prev) => (areEventLabelsEqual(prev, labels) ? prev : labels))
   }, [currentZoom, annotations, events])
@@ -658,10 +802,13 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       e.preventDefault()
 
       const plot = uplotRef.current
-      if (!plot || !currentZoom) return
+      const currentZoomState = useWaveformStore.getState().currentZoom
+      if (!plot || !currentZoomState) return
 
       const { deltaY, deltaX, shiftKey, metaKey, ctrlKey } = e
       const zoomMode: 'x' | 'y' | 'xy' = metaKey || ctrlKey ? 'x' : shiftKey ? 'y' : 'xy'
+      lastWheelTsRef.current = Date.now()
+      lastWheelModeRef.current = zoomMode
 
       let axisDelta = Math.abs(deltaY) >= Math.abs(deltaX) ? deltaY : deltaX
       if (axisDelta === 0 && deltaX !== 0) {
@@ -670,38 +817,67 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
 
       if (axisDelta === 0) return
 
-      const plotRect = plot.over.getBoundingClientRect()
-      const xWithin = e.clientX - plotRect.left
-      const yWithin = e.clientY - plotRect.top
+      const overRect = plot.over.getBoundingClientRect()
+      const xWithinOver = e.clientX - overRect.left
+      const yWithinOver = e.clientY - overRect.top
+      // 使用 overlay 内相对坐标（overlay 本身就覆盖绘图区，原点即绘图区左上角）
+      const xInPlot = Math.max(0, Math.min(xWithinOver, plot.bbox.width))
+      const yInPlot = Math.max(0, Math.min(yWithinOver, plot.bbox.height))
 
-      const xValue = plot.posToVal(xWithin, 'x')
-      const yValue = plot.posToVal(yWithin, 'y')
+      const xValue = plot.posToVal(xInPlot, 'x')
+      const yValue = plot.posToVal(yInPlot, 'y')
 
       const zoomFactor = axisDelta > 0 ? 1.1 : 0.9
-      const xRange = currentZoom.xMax - currentZoom.xMin
-      const yRange = currentZoom.yMax - currentZoom.yMin
+      const xRange = currentZoomState.xMax - currentZoomState.xMin
+      const yRange = currentZoomState.yMax - currentZoomState.yMin
 
-      let newXMin = currentZoom.xMin
-      let newXMax = currentZoom.xMax
-      let newYMin = currentZoom.yMin
-      let newYMax = currentZoom.yMax
+      let newXMin = currentZoomState.xMin
+      let newXMax = currentZoomState.xMax
+      let newYMin = currentZoomState.yMin
+      let newYMax = currentZoomState.yMax
 
-      if ((zoomMode === 'x' || zoomMode === 'xy') && xRange > 0 && Number.isFinite(xValue)) {
-        const leftSpan = xValue - currentZoom.xMin
-        const rightSpan = currentZoom.xMax - xValue
-        const newLeftSpan = leftSpan * zoomFactor
-        const newRightSpan = rightSpan * zoomFactor
-        newXMin = xValue - newLeftSpan
-        newXMax = xValue + newRightSpan
+      const xPivot = Number.isFinite(xValue) ? (xValue as number) : (currentZoomState.xMin + currentZoomState.xMax) / 2
+      const yPivot = Number.isFinite(yValue) ? (yValue as number) : (currentZoomState.yMin + currentZoomState.yMax) / 2
+
+      if (DEBUG_ZOOM) {
+        console.debug('[waveform][wheel] start', {
+          metaKey,
+          ctrlKey,
+          shiftKey,
+          zoomMode,
+          deltaX,
+          deltaY,
+          axisDelta,
+          zoomFactor,
+          overRect: { left: overRect.left, top: overRect.top, width: overRect.width, height: overRect.height },
+          bbox: plot.bbox,
+          client: { x: e.clientX, y: e.clientY },
+          xWithinOver,
+          yWithinOver,
+          xInPlot,
+          yInPlot,
+          xValue,
+          yValue,
+          currentZoomState,
+        })
       }
 
-      if ((zoomMode === 'y' || zoomMode === 'xy') && yRange > 0 && Number.isFinite(yValue)) {
-        const lowerSpan = yValue - currentZoom.yMin
-        const upperSpan = currentZoom.yMax - yValue
+      if ((zoomMode === 'x' || zoomMode === 'xy') && xRange > 0) {
+        const leftSpan = xPivot - currentZoomState.xMin
+        const rightSpan = currentZoomState.xMax - xPivot
+        const newLeftSpan = leftSpan * zoomFactor
+        const newRightSpan = rightSpan * zoomFactor
+        newXMin = xPivot - newLeftSpan
+        newXMax = xPivot + newRightSpan
+      }
+
+      if ((zoomMode === 'y' || zoomMode === 'xy') && yRange > 0) {
+        const lowerSpan = yPivot - currentZoomState.yMin
+        const upperSpan = currentZoomState.yMax - yPivot
         const newLowerSpan = lowerSpan * zoomFactor
         const newUpperSpan = upperSpan * zoomFactor
-        newYMin = yValue - newLowerSpan
-        newYMax = yValue + newUpperSpan
+        newYMin = yPivot - newLowerSpan
+        newYMax = yPivot + newUpperSpan
       }
 
       const waveformData = waveformRef.current
@@ -736,8 +912,27 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
         newYMax = center + 1e-9
       }
 
-      plot.setScale('x', { min: newXMin, max: newXMax })
-      plot.setScale('y', { min: newYMin, max: newYMax })
+      applyScale(plot, {
+        x: { min: newXMin, max: newXMax },
+        y: { min: newYMin, max: newYMax },
+      })
+
+      if (DEBUG_ZOOM) {
+        const xs = plot.scales.x
+        const ys = plot.scales.y
+        console.debug('[waveform][wheel] apply', {
+          newXMin,
+          newXMax,
+          newYMin,
+          newYMax,
+          uplotScalesAfter: {
+            xMin: xs?.min,
+            xMax: xs?.max,
+            yMin: ys?.min,
+            yMax: ys?.max,
+          },
+        })
+      }
 
       setZoom({
         xMin: newXMin,
@@ -748,17 +943,25 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       })
     }
 
-    const plotEl = plotRef.current
-    if (plotEl) {
-      plotEl.addEventListener('wheel', handleWheel, { passive: false })
+    const overEl = uplotRef.current?.over ?? null
+    if (overEl) {
+      overEl.addEventListener('wheel', handleWheel, { passive: false })
+      if (DEBUG_ZOOM) {
+        const r = overEl.getBoundingClientRect()
+        console.debug('[waveform][wheel] listener attached', {
+          overRect: { left: r.left, top: r.top, width: r.width, height: r.height },
+        })
+      }
     }
 
     return () => {
-      if (plotEl) {
-        plotEl.removeEventListener('wheel', handleWheel)
+      const overCleanup = uplotRef.current?.over ?? overEl
+      if (overCleanup) {
+        overCleanup.removeEventListener('wheel', handleWheel)
+        if (DEBUG_ZOOM) console.debug('[waveform][wheel] listener removed')
       }
     }
-  }, [currentZoom, setZoom])
+  }, [setZoom, waveform, width, height])
 
   return (
     <div ref={containerRef} data-event-menu-root className="relative w-full h-full">

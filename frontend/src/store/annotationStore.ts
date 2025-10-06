@@ -3,7 +3,14 @@ import { persist } from 'zustand/middleware'
 import annotationService from '../services/annotationService'
 import { normalizeAnnotationPhases } from '../utils/phaseUtils'
 import { useWaveformStore } from './waveformStore'
-import type { AnnotationEvent, AnnotationPhase, AnnotationSegment } from '../types/waveform'
+import { useAuthStore } from './authStore'
+import { buildDraftId, useDraftStore } from './draftStore'
+import type {
+  AnnotationEvent,
+  AnnotationPhase,
+  AnnotationSegment,
+  AnnotationVersionMeta,
+} from '../types/waveform'
 
 interface BoundarySnapshot {
   time: number
@@ -16,9 +23,12 @@ interface AnnotationState {
   events: AnnotationEvent[]
   annotationsLoading: boolean
   annotationsError: string | null
-  isSyncingDrafts: boolean
-  lastSyncAt: number | null
-  syncError: string | null
+  currentFileId: string | null
+  currentTrialIndex: number | null
+  versions: AnnotationVersionMeta[]
+  activeVersionId: string | null
+  selectedVersionId: string | null
+  isOwner: boolean
 
   // 标注阶段配置（可拖拽调整顺序）
   phases: AnnotationPhase[]
@@ -45,7 +55,7 @@ interface AnnotationState {
   selectPhaseByShortcut: (shortcut: string) => void
 
   // 数据操作
-  loadAnnotations: (fileId: string, trialIndex: number) => Promise<void>
+  loadAnnotations: (fileId: string, trialIndex: number, versionId?: string | null) => Promise<void>
   clearAnnotations: () => void
   handleBoundaryClick: (params: {
     fileId: string
@@ -56,9 +66,11 @@ interface AnnotationState {
   updateAnnotation: (id: string, updates: Partial<AnnotationSegment>) => Promise<void>
   deleteAnnotation: (id: string) => Promise<void>
   deleteEvent: (eventIndex: number) => Promise<void>
-  syncDrafts: () => Promise<void>
   cancelCurrentEvent: () => Promise<void>
   advancePhase: () => void
+  selectVersion: (versionId: string | null) => void
+  // 确保当前视图可编辑：在他人版本下提示并将当前版本下载为草稿
+  ensureEditableViaDraft: () => Promise<void>
 }
 
 const DEFAULT_PHASES: AnnotationPhase[] = normalizeAnnotationPhases([
@@ -140,6 +152,33 @@ function findIncompleteEvent(
   return null
 }
 
+function persistDraftSegments(
+  fileId: string,
+  trialIndex: number,
+  segments: AnnotationSegment[]
+) {
+  const auth = useAuthStore.getState()
+  const userId = auth.user?.id
+  const username = auth.user?.username ?? null
+  if (!userId) return
+
+  const draftId = buildDraftId(fileId, trialIndex, userId)
+  useDraftStore
+    .getState()
+    .updateDraftSegments(draftId, fileId, trialIndex, segments, userId, username)
+}
+
+function markSegmentsUnsynced(segments: AnnotationSegment[]): AnnotationSegment[] {
+  return segments.map((segment) => ({ ...segment, synced: false as const }))
+}
+
+function createLocalId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 export const useAnnotationStore = create<AnnotationState>()(
   persist(
     (set, get) => ({
@@ -147,9 +186,12 @@ export const useAnnotationStore = create<AnnotationState>()(
       events: [],
       annotationsLoading: false,
       annotationsError: null,
-      isSyncingDrafts: false,
-      lastSyncAt: null,
-      syncError: null,
+      currentFileId: null,
+      currentTrialIndex: null,
+      versions: [],
+      activeVersionId: null,
+      selectedVersionId: null,
+      isOwner: false,
       phases: DEFAULT_PHASES,
       isAnnotating: false,
       currentPhaseIndex: 0,
@@ -164,7 +206,14 @@ export const useAnnotationStore = create<AnnotationState>()(
           annotationsError: null,
         }
 
+        // 若尝试关闭标注，但当前存在未完成的区间（已选择起点未选择终点），禁止关闭
         if (!value) {
+          if (state.pendingBoundary) {
+            set({
+              annotationsError: '当前存在未完成的标注，请先完成或按 Esc 取消',
+            })
+            return
+          }
           partial.pendingBoundary = null
           partial.eventStartBoundary = null
           partial.currentPhaseIndex = 0
@@ -293,24 +342,67 @@ export const useAnnotationStore = create<AnnotationState>()(
         })
       },
 
-      loadAnnotations: async (fileId, trialIndex) => {
-        set({ annotationsLoading: true, annotationsError: null })
+      loadAnnotations: async (fileId, trialIndex, versionId) => {
+        set({
+          annotationsLoading: true,
+          annotationsError: null,
+        })
+
+        const authState = useAuthStore.getState()
+        const user = authState.user
+        const userId = user?.id ?? ''
+        const username = user?.username ?? null
+
         try {
-          const segments = await annotationService.getAnnotations(fileId, trialIndex)
-          const sorted = segments
-            .map((segment) => ({ ...segment, synced: true as const }))
-            .sort((a, b) => a.startTime - b.startTime)
+          const { annotations, versions, activeVersionId } = await annotationService.getAnnotations(
+            fileId,
+            trialIndex,
+            versionId ?? undefined
+          )
+
+          const draftStore = useDraftStore.getState()
+          const draftId = userId ? buildDraftId(fileId, trialIndex, userId) : null
+          const existingDraft = draftId ? draftStore.drafts[draftId] : undefined
+
+          const effectiveVersionId = (versionId ?? activeVersionId) ?? null
+          const activeVersion = versions.find((item) => item.id === effectiveVersionId) ?? null
+          const preliminaryOwnerFlag =
+            versions.length === 0 || activeVersion === null
+              ? true
+              : Boolean(activeVersion.isOwner)
+
+          const sourceSegments: AnnotationSegment[] = existingDraft
+            ? existingDraft.segments.map((segment) => ({ ...segment, synced: false as const }))
+            : (annotations ?? []).map((segment) => ({ ...segment, synced: true as const }))
+
+          if (existingDraft && existingDraft.segments.length === 0) {
+            draftStore.removeDraft(existingDraft.id)
+          }
+
+          const sorted = sourceSegments.sort((a, b) => a.startTime - b.startTime)
           const events = buildEventsFromSegments(sorted)
           const maxEvent = events.length > 0 ? events[events.length - 1].eventIndex : -1
+
           set({
             annotations: sorted,
             events,
             annotationsLoading: false,
+            annotationsError: null,
             currentPhaseIndex: 0,
             currentEventIndex: maxEvent + 1,
             pendingBoundary: null,
             eventStartBoundary: null,
+            currentFileId: fileId,
+            currentTrialIndex: trialIndex,
+            versions,
+            activeVersionId,
+            selectedVersionId: effectiveVersionId,
+            isOwner: existingDraft ? true : preliminaryOwnerFlag,
           })
+
+          if (existingDraft) {
+            draftStore.markDirty(existingDraft.id)
+          }
         } catch (error) {
           console.error('Failed to load annotations:', error)
           set({
@@ -322,6 +414,12 @@ export const useAnnotationStore = create<AnnotationState>()(
             currentEventIndex: 0,
             pendingBoundary: null,
             eventStartBoundary: null,
+            currentFileId: fileId,
+            currentTrialIndex: trialIndex,
+            versions: [],
+            activeVersionId: null,
+            selectedVersionId: null,
+            isOwner: true,
           })
         }
       },
@@ -334,6 +432,12 @@ export const useAnnotationStore = create<AnnotationState>()(
           eventStartBoundary: null,
           currentPhaseIndex: 0,
           currentEventIndex: 0,
+          currentFileId: null,
+          currentTrialIndex: null,
+          versions: [],
+          activeVersionId: null,
+          selectedVersionId: null,
+          isOwner: false,
         })
       },
 
@@ -347,6 +451,10 @@ export const useAnnotationStore = create<AnnotationState>()(
           isAnnotating: useAnnotationStore.getState().isAnnotating,
           pendingBoundary: state.pendingBoundary,
         })
+        if (!state.isOwner) {
+          set({ annotationsError: '当前版本为只读，无法编辑' })
+          return
+        }
         if (state.phases.length === 0) {
           set({ annotationsError: '请先在标注配置中添加阶段' })
           console.warn('[annotation] no phases configured')
@@ -438,233 +546,145 @@ export const useAnnotationStore = create<AnnotationState>()(
           color: phase.color,
         }
 
-        try {
-          console.debug('[annotation] create annotation payload', payload)
-          const newSegment = await annotationService.createAnnotation(payload)
-
-          set((current) => {
-            const annotations = [...current.annotations, newSegment].sort(
-              (a, b) => a.startTime - b.startTime
-            )
-            const events = buildEventsFromSegments(annotations)
-
-            const isLastPhase = current.currentPhaseIndex >= current.phases.length - 1
-            const nextPhaseIndex = isLastPhase ? 0 : current.currentPhaseIndex + 1
-            const nextEventIndex = isLastPhase ? current.currentEventIndex + 1 : current.currentEventIndex
-            const nextPending = isLastPhase ? null : boundary
-            const nextEventStart = isLastPhase ? null : current.eventStartBoundary
-
-            console.debug('[annotation] annotation created', {
-              newSegment,
-              annotationsCount: annotations.length,
-              nextPhaseIndex,
-              nextEventIndex,
-            })
-
-            return {
-              annotations,
-              events,
-              pendingBoundary: nextPending,
-              eventStartBoundary: nextEventStart,
-              currentPhaseIndex: nextPhaseIndex,
-              currentEventIndex: nextEventIndex,
-              annotationsError: null,
-            }
-          })
-        } catch (error) {
-          console.error('Failed to create annotation:', error)
-          if (error && typeof error === 'object' && 'response' in error && error.response) {
-            const axiosError = error as { response?: { data?: unknown } }
-            const detail =
-              typeof axiosError.response?.data === 'object' && axiosError.response?.data
-                ? (axiosError.response?.data as Record<string, unknown>).detail
-                : null
-            set({
-              annotationsError:
-                typeof detail === 'string'
-                  ? `创建标注失败: ${detail}`
-                  : '创建标注失败，请检查网络或数据有效性',
-            })
-          } else {
-            set({
-              annotationsError: error instanceof Error ? error.message : 'Failed to create annotation',
-            })
-          }
-        }
-      },
-
-      updateAnnotation: async (id, updates) => {
-        try {
-          const updated = await annotationService.updateAnnotation(id, updates)
-          set((state) => {
-            const annotations = state.annotations.map((ann) =>
-              ann.id === id ? updated : ann
-            )
-            return {
-              annotations,
-              events: buildEventsFromSegments(annotations),
-              pendingBoundary: null,
-              eventStartBoundary: null,
-              currentPhaseIndex: 0,
-            }
-          })
-        } catch (error) {
-          console.error('Failed to update annotation:', error)
-          set({
-            annotationsError: error instanceof Error ? error.message : 'Failed to update annotation',
-          })
-        }
-      },
-
-      deleteAnnotation: async (id) => {
-        const target = get().annotations.find((ann) => ann.id === id)
-        if (!target) return
-
-        if (target.synced === false) {
-          set((state) => {
-            const annotations = state.annotations.filter((ann) => ann.id !== id)
-            return {
-              annotations,
-              events: buildEventsFromSegments(annotations),
-            }
-          })
-          return
-        }
-
-        try {
-          await annotationService.deleteAnnotation(id)
-          set((state) => {
-            const annotations = state.annotations.filter((ann) => ann.id !== id)
-            return {
-              annotations,
-              events: buildEventsFromSegments(annotations),
-            }
-          })
-        } catch (error) {
-          console.error('Failed to delete annotation:', error)
-          set({
-            annotationsError: error instanceof Error ? error.message : 'Failed to delete annotation',
-          })
-        }
-      },
-
-      deleteEvent: async (eventIndex) => {
-        const annotations = get().annotations
-        const segments = annotations.filter((ann) => ann.eventIndex === eventIndex)
-        if (segments.length === 0) return
-
-        const drafts = segments.filter((segment) => segment.synced === false)
-        if (drafts.length > 0) {
-          set((state) => {
-            const filtered = state.annotations.filter((ann) =>
-              !(ann.eventIndex === eventIndex && ann.synced === false)
-            )
-            return {
-              annotations: filtered,
-              events: buildEventsFromSegments(filtered),
-            }
-          })
-        }
-
-        const syncedSegments = segments.filter((segment) => segment.synced !== false)
-        if (syncedSegments.length === 0) {
-          set((state) => {
-            const filtered = state.annotations.filter((ann) => ann.eventIndex !== eventIndex)
-            return {
-              annotations: filtered,
-              events: buildEventsFromSegments(filtered),
-            }
-          })
-          return
-        }
-
-        try {
-          await Promise.all(syncedSegments.map((segment) => annotationService.deleteAnnotation(segment.id)))
-          set((state) => {
-            const filtered = state.annotations.filter((ann) => ann.eventIndex !== eventIndex)
-            return {
-              annotations: filtered,
-              events: buildEventsFromSegments(filtered),
-            }
-          })
-        } catch (error) {
-          console.error('Failed to delete event:', error)
-          set({
-            annotationsError: error instanceof Error ? error.message : 'Failed to delete event',
-          })
-        }
-      },
-      syncDrafts: async () => {
-        const state = get()
-        if (state.isSyncingDrafts) return
-        const drafts = state.annotations.filter((ann) => ann.synced === false)
-        if (drafts.length === 0) {
-          set({ lastSyncAt: Date.now(), syncError: null })
-          return
-        }
-
-        set({ isSyncingDrafts: true })
-        const updates: AnnotationSegment[] = []
-        let syncError: string | null = null
-
-        for (const draft of drafts) {
-          try {
-            const payload = {
-              fileId: draft.fileId,
-              trialIndex: draft.trialIndex,
-              phaseId: draft.phaseId,
-              phaseName: draft.phaseName,
-              startTime: draft.startTime,
-              endTime: draft.endTime,
-              startIndex: draft.startIndex,
-              endIndex: draft.endIndex,
-              eventIndex: draft.eventIndex,
-              color: draft.color,
-              label: draft.label,
-            }
-            console.debug('[annotation] sync draft', payload)
-            const result = await annotationService.createAnnotation(payload)
-            updates.push({ ...result, synced: true, localId: draft.localId ?? draft.id })
-          } catch (error) {
-            console.error('[annotation] draft sync failed', error, draft)
-            if (!syncError) {
-              syncError = error instanceof Error ? error.message : '未知错误'
-            }
-          }
+        const auth = useAuthStore.getState()
+        const userId = auth.user?.id ?? ''
+        const versionId = get().activeVersionId ?? null
+        const newSegment: AnnotationSegment = {
+          id: createLocalId(),
+          fileId,
+          trialIndex,
+          phaseId: phase.id,
+          phaseName: phase.name,
+          startTime,
+          endTime,
+          startIndex,
+          endIndex,
+          eventIndex: state.currentEventIndex,
+          color: phase.color,
+          label: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          synced: false as const,
+          userId,
+          versionId: versionId ?? undefined,
         }
 
         set((current) => {
-          let annotations = current.annotations
-          if (updates.length > 0) {
-            annotations = annotations.map((ann) => {
-              const matched = updates.find((update) =>
-                update.localId && (ann.localId === update.localId || ann.id === update.localId)
-              )
-              return matched
-                ? { ...matched, synced: true, localId: matched.localId }
-                : ann
-            })
-          }
+          const annotations = [...current.annotations, newSegment].sort((a, b) => a.startTime - b.startTime)
+          const unsynced = markSegmentsUnsynced(annotations)
+          persistDraftSegments(fileId, trialIndex, unsynced)
 
-          const sorted = [...annotations].sort((a, b) => a.startTime - b.startTime)
+          const events = buildEventsFromSegments(unsynced)
+          const isLastPhase = current.currentPhaseIndex >= current.phases.length - 1
+          const nextPhaseIndex = isLastPhase ? 0 : current.currentPhaseIndex + 1
+          const nextEventIndex = isLastPhase ? current.currentEventIndex + 1 : current.currentEventIndex
+          const nextPending = isLastPhase ? null : boundary
+          const nextEventStart = isLastPhase ? null : current.eventStartBoundary
 
           return {
-            annotations: sorted,
-            events: buildEventsFromSegments(sorted),
-            isSyncingDrafts: false,
-            lastSyncAt: Date.now(),
-            syncError,
+            annotations: unsynced,
+            events,
+            pendingBoundary: nextPending,
+            eventStartBoundary: nextEventStart,
+            currentPhaseIndex: nextPhaseIndex,
+            currentEventIndex: nextEventIndex,
+            annotationsError: null,
+            isOwner: true,
+          }
+        })
+      },
+
+      updateAnnotation: async (id, updates) => {
+        const state = get()
+        const target = state.annotations.find((ann) => ann.id === id)
+        if (!target) {
+          set({ annotationsError: '未找到需要更新的标注' })
+          return
+        }
+        if (!state.isOwner) {
+          set({ annotationsError: '当前版本为只读，无法编辑' })
+          return
+        }
+
+        const merged: AnnotationSegment = {
+          ...target,
+          ...updates,
+          updatedAt: new Date().toISOString(),
+          synced: false as const,
+        }
+
+        set((current) => {
+          const annotations = current.annotations.map((ann) => (ann.id === id ? merged : ann))
+          const unsynced = markSegmentsUnsynced(annotations)
+          persistDraftSegments(target.fileId, target.trialIndex, unsynced)
+          return {
+            annotations: unsynced,
+            events: buildEventsFromSegments(unsynced),
+            pendingBoundary: null,
+            eventStartBoundary: null,
+            currentPhaseIndex: 0,
+            annotationsError: null,
+            isOwner: true,
+          }
+        })
+      },
+
+      deleteAnnotation: async (id) => {
+        if (!get().isOwner) {
+          set({ annotationsError: '当前版本为只读，无法编辑' })
+          return
+        }
+        const target = get().annotations.find((ann) => ann.id === id)
+        if (!target) return
+
+        set((state) => {
+          const annotations = state.annotations.filter((ann) => ann.id !== id)
+          const unsynced = markSegmentsUnsynced(annotations)
+          persistDraftSegments(target.fileId, target.trialIndex, unsynced)
+          return {
+            annotations: unsynced,
+            events: buildEventsFromSegments(unsynced),
+            annotationsError: null,
+            isOwner: true,
+          }
+        })
+      },
+
+      deleteEvent: async (eventIndex) => {
+        if (!get().isOwner) {
+          set({ annotationsError: '当前版本为只读，无法编辑' })
+          return
+        }
+        const annotations = get().annotations
+        const segments = annotations.filter((ann) => ann.eventIndex === eventIndex)
+        if (segments.length === 0) return
+        const reference = segments[0]
+
+        set((state) => {
+          const filtered = state.annotations.filter((ann) => ann.eventIndex !== eventIndex)
+          const unsynced = markSegmentsUnsynced(filtered)
+          persistDraftSegments(reference.fileId, reference.trialIndex, unsynced)
+          return {
+            annotations: unsynced,
+            events: buildEventsFromSegments(unsynced),
+            annotationsError: null,
+            isOwner: true,
           }
         })
       },
 
       cancelCurrentEvent: async () => {
         const state = get()
+        if (!state.isOwner) {
+          set({ annotationsError: '当前版本为只读，无法编辑' })
+          return
+        }
         const targetIndex = state.currentEventIndex
         const segments = state.annotations.filter((ann) => ann.eventIndex === targetIndex)
         if (segments.length === 0) {
+          // 没有已完成的片段，仅清除当前未完成的起止点，保持标注模式开启
           set({
-            isAnnotating: false,
+            isAnnotating: true,
             pendingBoundary: null,
             eventStartBoundary: null,
             annotationsError: null,
@@ -672,44 +692,31 @@ export const useAnnotationStore = create<AnnotationState>()(
           return
         }
 
-        const drafts = segments.filter((segment) => segment.synced === false)
-        if (drafts.length > 0) {
-          set((current) => {
-            const annotations = current.annotations.filter((ann) =>
-              !(ann.eventIndex === targetIndex && ann.synced === false)
-            )
-            return {
-              annotations,
-              events: buildEventsFromSegments(annotations),
-            }
-          })
-        }
-
-        const syncedSegments = segments.filter((segment) => segment.synced !== false)
-        if (syncedSegments.length > 0) {
-          try {
-            await Promise.all(syncedSegments.map((segment) => annotationService.deleteAnnotation(segment.id)))
-          } catch (error) {
-            console.error('[annotation] cancel event delete failed', error)
-            set({
-              annotationsError: error instanceof Error ? error.message : '取消事件失败',
-            })
-          }
-        }
-
+        const reference = segments[0]
         set((current) => {
           const annotations = current.annotations.filter((ann) => ann.eventIndex !== targetIndex)
-          const events = buildEventsFromSegments(annotations)
+          const unsynced = markSegmentsUnsynced(annotations)
+          const events = buildEventsFromSegments(unsynced)
           const nextEventIndex =
-            annotations.reduce((max, ann) => Math.max(max, ann.eventIndex), -1) + 1
+            unsynced.reduce((max, ann) => Math.max(max, ann.eventIndex), -1) + 1
+
+          if (reference) {
+            persistDraftSegments(
+              reference.fileId,
+              reference.trialIndex,
+              unsynced
+            )
+          }
           return {
-            annotations,
+            annotations: unsynced,
             events,
-            isAnnotating: false,
+            isAnnotating: true,
             pendingBoundary: null,
             eventStartBoundary: null,
             currentPhaseIndex: 0,
             currentEventIndex: nextEventIndex,
+            annotationsError: null,
+            isOwner: true,
           }
         })
       },
@@ -752,34 +759,55 @@ export const useAnnotationStore = create<AnnotationState>()(
           })
         }
       },
+
+      selectVersion: (versionId) => {
+        const state = get()
+        if (!state.currentFileId || state.currentTrialIndex === null) return
+        void get()
+          .loadAnnotations(state.currentFileId, state.currentTrialIndex, versionId)
+          .catch((error) => {
+            console.error('[annotation] select version failed', error)
+            set({
+              annotationsError:
+                error instanceof Error ? error.message : '切换版本失败',
+            })
+          })
+      },
+
+      ensureEditableViaDraft: async () => {
+        const state = get()
+        if (state.isOwner) return
+        const fileId = state.currentFileId
+        const trialIndex = state.currentTrialIndex
+        if (!fileId || trialIndex === null) return
+
+        const auth = useAuthStore.getState()
+        const userId = auth.user?.id
+        const username = auth.user?.username ?? null
+        if (!userId) {
+          set({ annotationsError: '未登录用户无法创建草稿' })
+          return
+        }
+
+        // 使用当前内存标注作为草稿内容，全部标记为未同步
+        const unsynced = markSegmentsUnsynced(state.annotations)
+        persistDraftSegments(fileId, trialIndex, unsynced)
+        try {
+          useDraftStore.getState().setMessage('已将当前版本下载为草稿，可在草稿箱中“立即同步”上传至云端')
+        } catch {
+          // 忽略 UI 消息失败
+        }
+        await get().loadAnnotations(fileId, trialIndex)
+      },
     }),
     {
       name: 'annotation-preferences',
       partialize: (state) => ({
         phases: state.phases,
-        draftCache: state.annotations.filter((ann) => ann.synced === false),
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.phases = state.phases ? normalizeAnnotationPhases(state.phases) : DEFAULT_PHASES
-          const draftCache = (state as unknown as { draftCache?: AnnotationSegment[] }).draftCache
-          const drafts = draftCache?.map((draft) => ({ ...draft, synced: false as const })) ?? []
-          state.annotations = drafts
-          state.events = buildEventsFromSegments(drafts)
-          state.annotationsLoading = false
-          state.annotationsError = null
-          state.isAnnotating = false
-          state.currentPhaseIndex = 0
-          state.currentEventIndex = drafts.reduce(
-            (max, ann) => Math.max(max, ann.eventIndex),
-            -1,
-          ) + 1
-          state.pendingBoundary = null
-          state.eventStartBoundary = null
-          state.isSyncingDrafts = false
-          state.lastSyncAt = null
-          state.syncError = null
-          delete (state as unknown as Record<string, unknown>).draftCache
         }
       },
     }

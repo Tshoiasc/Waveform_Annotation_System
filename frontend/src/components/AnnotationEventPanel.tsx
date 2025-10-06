@@ -2,12 +2,14 @@ import { useMemo } from 'react'
 import { useAnnotationStore } from '../store/annotationStore'
 
 export default function AnnotationEventPanel() {
-  const { annotations, phases, deleteAnnotation, deleteEvent } = useAnnotationStore(
+  const { annotations, phases, deleteAnnotation, deleteEvent, isOwner, ensureEditableViaDraft } = useAnnotationStore(
     (state) => ({
       annotations: state.annotations,
       phases: state.phases,
       deleteAnnotation: state.deleteAnnotation,
       deleteEvent: state.deleteEvent,
+      isOwner: state.isOwner,
+      ensureEditableViaDraft: state.ensureEditableViaDraft,
     })
   )
 
@@ -54,7 +56,14 @@ export default function AnnotationEventPanel() {
               <span className="text-sm font-medium text-gray-700">事件 {eventIndex + 1}</span>
               <button
                 type="button"
-                onClick={() => void deleteEvent(eventIndex)}
+                onClick={async () => {
+                  if (!isOwner) {
+                    const ok = window.confirm('当前为他人版本，是否下载到我的草稿箱并进行编辑？')
+                    if (!ok) return
+                    await ensureEditableViaDraft()
+                  }
+                  void deleteEvent(eventIndex)
+                }}
                 className="text-xs text-red-500 hover:text-red-600"
               >
                 删除事件
@@ -86,7 +95,14 @@ export default function AnnotationEventPanel() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => void deleteAnnotation(segment.id)}
+                      onClick={async () => {
+                        if (!isOwner) {
+                          const ok = window.confirm('当前为他人版本，是否下载到我的草稿箱并进行编辑？')
+                          if (!ok) return
+                          await ensureEditableViaDraft()
+                        }
+                        void deleteAnnotation(segment.id)
+                      }}
                       className="text-[11px] text-red-500 hover:text-red-600"
                     >
                       删除

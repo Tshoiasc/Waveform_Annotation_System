@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
-import type { MouseEvent } from 'react'
 import { useWorkspaceStore } from '../store/workspaceStore'
 import { useWaveformStore } from '../store/waveformStore'
-import { useAuthStore } from '../store/authStore'
+// import { useAuthStore } from '../store/authStore'
 import type { TrialMetadata } from '../types/waveform'
 
 interface ThumbnailProps {
@@ -93,7 +92,6 @@ export default function TrialList() {
     selectedFile,
     selectedTrial,
     selectTrial,
-    updateTrialFinished,
   } = useWorkspaceStore((state) => ({
     trials: state.trials,
     trialsLoading: state.trialsLoading,
@@ -101,11 +99,10 @@ export default function TrialList() {
     selectedFile: state.selectedFile,
     selectedTrial: state.selectedTrial,
     selectTrial: state.selectTrial,
-    updateTrialFinished: state.updateTrialFinished,
   }))
 
   const loadWaveform = useWaveformStore((state) => state.loadWaveform)
-  const canAnnotate = useAuthStore((state) => state.hasPermission('annotations.annotate'))
+  // 权限不再影响 Trial 列表的完成标记（已移除“标记完成”按钮）
 
   // 处理Trial选择
   const handleTrialClick = (trial: TrialMetadata) => {
@@ -204,31 +201,12 @@ export default function TrialList() {
             </div>
           ) : (
             <ul className="divide-y divide-gray-100">
-              {trials.map((trial) => {
-                const isFinished = Boolean(trial.finished)
-                const annotationCount = trial.annotationCount ?? 0
-                let statusLabel = '未开始'
-                let badgeClass = 'border-gray-200 bg-gray-100 text-gray-600'
-                if (isFinished) {
-                  statusLabel = '已完成'
-                  badgeClass = 'border-green-200 bg-green-100 text-green-700'
-                } else if (annotationCount > 0) {
-                  statusLabel = '进行中'
-                  badgeClass = 'border-amber-200 bg-amber-50 text-amber-700'
-                }
-
-                const handleToggleClick = async (event: MouseEvent<HTMLButtonElement>) => {
-                  event.stopPropagation()
-                  if (!canAnnotate) {
-                    return
-                  }
-                  if (!selectedFile) return
-                  try {
-                    await updateTrialFinished(selectedFile.fileId, trial.trialIndex, !isFinished)
-                  } catch (error) {
-                    console.error('更新Trial状态失败', error)
-                  }
-                }
+            {trials.map((trial) => {
+                const versionCount = trial.versionCount ?? 0
+                const badgeClass = versionCount > 0
+                  ? 'border-blue-200 bg-blue-50 text-blue-700'
+                  : 'border-gray-200 bg-gray-100 text-gray-600'
+                const statusLabel = versionCount > 0 ? `版本 ${versionCount}` : '未完成'
 
                 return (
                   <li
@@ -250,9 +228,7 @@ export default function TrialList() {
                         <span className="text-sm font-medium text-gray-900">
                           Trial {trial.trialIndex}
                         </span>
-                        <span
-                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}
-                        >
+                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>
                           {statusLabel}
                         </span>
                       </div>
@@ -260,19 +236,6 @@ export default function TrialList() {
                         <span className="text-xs text-gray-500">
                           {formatDuration(trial.duration)}
                         </span>
-                        <button
-                          type="button"
-                          onClick={handleToggleClick}
-                          disabled={!canAnnotate}
-                          title={canAnnotate ? undefined : '当前账号缺少标注权限，无法修改Trial状态'}
-                          className={`rounded px-2 py-1 text-[11px] font-medium transition border disabled:cursor-not-allowed disabled:opacity-50 disabled:border-gray-200 disabled:text-gray-400 disabled:bg-gray-100 disabled:hover:bg-gray-100 disabled:hover:text-gray-400 ${
-                            isFinished
-                              ? 'border-gray-300 text-gray-500 hover:bg-gray-100'
-                              : 'border-blue-500 text-blue-600 hover:bg-blue-50'
-                          }`}
-                        >
-                          {isFinished ? '标记未完成' : '标记完成'}
-                        </button>
                       </div>
                     </div>
 
@@ -284,15 +247,15 @@ export default function TrialList() {
                     {/* 元数据 */}
                     <div className="mt-2 text-xs text-gray-500">
                       {trial.sampleRate.toFixed(0)} Hz · {trial.dataPoints} points
-                      {annotationCount > 0 && (
-                        <span className="ml-2 text-amber-600">
-                          标注 {annotationCount}
+                      {versionCount > 0 && (
+                        <span className="ml-2 text-blue-700">
+                          版本 {versionCount}
                         </span>
                       )}
-                    </div>
-                  </li>
-                )
-              })}
+                  </div>
+                </li>
+              )
+            })}
             </ul>
           )}
         </div>

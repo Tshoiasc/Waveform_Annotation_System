@@ -29,6 +29,7 @@ export interface TrialMetadata {
   finished?: boolean
   finishedAt?: string
   annotationCount?: number
+  versionCount?: number
 }
 
 // 波形数据
@@ -80,6 +81,8 @@ export interface AnnotationSegment {
   updatedAt: string
   synced?: boolean
   localId?: string
+  userId?: string
+  versionId?: string
 }
 
 export interface AnnotationSegmentPayload {
@@ -101,4 +104,24 @@ export interface AnnotationEvent {
   eventIndex: number
   startTime: number
   endTime: number
+}
+
+export interface AnnotationVersionMeta {
+  id: string
+  fileId: string
+  trialIndex: number
+  userId: string
+  username?: string | null
+  status: 'active' | 'draft'
+  segmentCount: number
+  createdAt?: string | null
+  updatedAt?: string | null
+  isOwner: boolean
+}
+
+export interface AnnotationSyncResult {
+  versionId: string
+  syncedAt: string
+  segmentCount: number
+  status: 'active' | 'draft'
 }

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.db import get_database
 from app.db.repositories.trial_metadata_repo import TrialMetadataRepository
+from app.db.repositories.annotation_version_repo import AnnotationVersionRepository
 from app.db.repositories.annotation_repo import AnnotationRepository
 from app.services import h5_service
 from typing import List, Dict
@@ -27,6 +28,7 @@ async def list_files(db: AsyncIOMotorDatabase = Depends(get_database)) -> List[D
 
         repo = TrialMetadataRepository(db)
         annotation_repo = AnnotationRepository(db)
+        version_repo = AnnotationVersionRepository(db)
         file_ids = [file['fileId'] for file in files]
         status_map = await repo.get_status_map(file_ids)
         annotation_map = await annotation_repo.count_by_files(file_ids)
@@ -76,6 +78,7 @@ async def list_trials(
         # 创建Repository
         repo = TrialMetadataRepository(db)
         annotation_repo = AnnotationRepository(db)
+        version_repo = AnnotationVersionRepository(db)
         annotation_map = await annotation_repo.count_by_files([file_id])
         annotation_counts = annotation_map.get(file_id, {})
 
@@ -88,6 +91,12 @@ async def list_trials(
                 lambda idx=i: h5_service.load_trial_metadata(str(file_path), idx)
             )
             metadata['annotationCount'] = annotation_counts.get(i, 0)
+            # 计算版本数量（每个Trial一个用户最多1个版本，但总体可能多人多版本）
+            try:
+                versions = await version_repo.list_versions(file_id, i)
+                metadata['versionCount'] = len(versions)
+            except Exception:
+                metadata['versionCount'] = 0
             trials.append(metadata)
 
         return trials
