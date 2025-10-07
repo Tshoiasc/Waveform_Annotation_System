@@ -32,11 +32,28 @@ services:
       REDIS_URL: redis://:Qq1970251968@117.50.201.9:26739
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       H5_DATA_PATH: /data/dataset
+      CORS_ORIGINS: "http://localhost:3000,http://frontend:80"
     volumes:
       - ./dataset:/data/dataset:ro
       - ./backend:/app
     depends_on:
       - mongodb
+    networks:
+      - waveform-net
+
+  # React前端
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: waveform-frontend
+    restart: always
+    ports:
+      - "3000:80"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+    depends_on:
+      - backend
     networks:
       - waveform-net
 

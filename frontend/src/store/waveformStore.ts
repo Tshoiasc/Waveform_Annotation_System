@@ -23,6 +23,9 @@ interface WaveformState {
   clearWaveform: () => void
 }
 
+// 调试：缩放链路日志（不进入状态树）
+const DEBUG_ZOOM_FLOW = true
+
 export const useWaveformStore = create<WaveformState>((set, get) => ({
   // 初始状态
   waveform: null,
@@ -39,6 +42,15 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
 
     try {
       const waveform = await fileService.getWaveform(fileId, trialIndex)
+      const debug = DEBUG_ZOOM_FLOW
+      if (debug) {
+        console.debug('[zoom][loadWaveform] fetched waveform', {
+          fileId,
+          trialIndex,
+          rawLen: waveform?.raw?.timestamps?.length,
+          filteredLen: waveform?.filtered?.values?.length,
+        })
+      }
 
       // 从设置中读取默认缩放倍数（>1 表示放大）
       const { defaultZoomX, defaultZoomY } = useSettingsStore.getState()
@@ -101,6 +113,19 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
         yMax: yMaxInit,
         timestamp: Date.now(),
       }
+      if (debug) {
+        console.debug('[zoom][loadWaveform] defaultZoom settings', {
+          defaultZoomX,
+          defaultZoomY,
+        })
+        console.debug('[zoom][loadWaveform] extents', {
+          xMinAll,
+          xMaxAll,
+          yMinAll,
+          yMaxAll,
+        })
+        console.debug('[zoom][loadWaveform] initialZoom', initialZoom)
+      }
 
       set({
         waveform,
@@ -119,7 +144,40 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
 
   // 设置缩放状态 (添加到历史栈)
   setZoom: (zoom: ZoomState) => {
-    const { zoomHistory, historyIndex } = get()
+    const { zoomHistory, historyIndex, waveform } = get()
+    const debug = DEBUG_ZOOM_FLOW
+    if (debug) {
+      let xMinAll: number | null = null
+      let xMaxAll: number | null = null
+      let yMinAll: number | null = null
+      let yMaxAll: number | null = null
+      if (waveform && waveform.raw?.timestamps?.length) {
+        xMinAll = Math.min(...waveform.raw.timestamps)
+        xMaxAll = Math.max(...waveform.raw.timestamps)
+      }
+      if (waveform && waveform.raw?.values?.length) {
+        yMinAll = Math.min(...waveform.raw.values)
+        yMaxAll = Math.max(...waveform.raw.values)
+      }
+      const equalsFullX =
+        xMinAll != null && xMaxAll != null && Math.abs(zoom.xMin - xMinAll) < 1e-9 && Math.abs(zoom.xMax - xMaxAll) < 1e-9
+      const equalsFullY =
+        yMinAll != null && yMaxAll != null && Math.abs(zoom.yMin - yMinAll) < 1e-9 && Math.abs(zoom.yMax - yMaxAll) < 1e-9
+      console.debug('[zoom][setZoom] incoming', {
+        zoom,
+        equalsFullX,
+        equalsFullY,
+        xMinAll,
+        xMaxAll,
+        yMinAll,
+        yMaxAll,
+        historyIndex,
+        historyLen: zoomHistory.length,
+      })
+      // 打印调用栈定位来源（滚轮 / 自动平移 / 初始化 / 撤销 等）
+      // eslint-disable-next-line no-console
+      console.trace('[zoom][setZoom] call stack')
+    }
 
     // 移除当前索引之后的历史记录
     const newHistory = zoomHistory.slice(0, historyIndex + 1)
@@ -140,9 +198,16 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
   // 撤销缩放 (Ctrl+Z)
   undoZoom: () => {
     const { zoomHistory, historyIndex } = get()
+    const debug = DEBUG_ZOOM_FLOW
+    if (debug) {
+      console.debug('[zoom][undoZoom] before', { historyIndex, historyLen: zoomHistory.length })
+    }
 
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1
+      if (debug) {
+        console.debug('[zoom][undoZoom] applying', zoomHistory[newIndex])
+      }
       set({
         currentZoom: zoomHistory[newIndex],
         historyIndex: newIndex,
@@ -153,9 +218,16 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
   // 重做缩放 (Ctrl+Shift+Z)
   redoZoom: () => {
     const { zoomHistory, historyIndex } = get()
+    const debug = DEBUG_ZOOM_FLOW
+    if (debug) {
+      console.debug('[zoom][redoZoom] before', { historyIndex, historyLen: zoomHistory.length })
+    }
 
     if (historyIndex < zoomHistory.length - 1) {
       const newIndex = historyIndex + 1
+      if (debug) {
+        console.debug('[zoom][redoZoom] applying', zoomHistory[newIndex])
+      }
       set({
         currentZoom: zoomHistory[newIndex],
         historyIndex: newIndex,
@@ -168,6 +240,10 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
     const { zoomHistory } = get()
     if (zoomHistory.length > 0) {
       const initialZoom = zoomHistory[0]
+      const debug = DEBUG_ZOOM_FLOW
+      if (debug) {
+        console.debug('[zoom][resetZoom] to initial', initialZoom)
+      }
       set({
         currentZoom: initialZoom,
         zoomHistory: [initialZoom],
@@ -178,6 +254,10 @@ export const useWaveformStore = create<WaveformState>((set, get) => ({
 
   // 清除波形数据
   clearWaveform: () => {
+    const debug = DEBUG_ZOOM_FLOW
+    if (debug) {
+      console.debug('[zoom][clearWaveform] clearing waveform & zoom state')
+    }
     set({
       waveform: null,
       currentZoom: null,

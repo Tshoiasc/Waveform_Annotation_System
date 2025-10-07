@@ -304,6 +304,15 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
   }, [contextMenu.visible, contextMenu.eventIndex, events])
 
   useEffect(() => {
+    if (DEBUG_ZOOM) {
+      console.debug('[waveform] create/destroy effect enter', {
+        hasPlotEl: Boolean(plotRef.current),
+        hasWaveform: Boolean(waveform),
+        hasCurrentZoom: Boolean(currentZoom),
+        width,
+        height,
+      })
+    }
     if (!plotRef.current || !waveform || !currentZoom) return
 
     const data: uPlot.AlignedData = [
@@ -311,6 +320,24 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       waveform.raw.values,
       waveform.filtered.values,
     ]
+
+    if (DEBUG_ZOOM) {
+      const ts = waveform.raw.timestamps
+      const vs = waveform.raw.values
+      const xMinAll = ts.length ? Math.min(...ts) : null
+      const xMaxAll = ts.length ? Math.max(...ts) : null
+      const yMinAll = vs.length ? Math.min(...vs) : null
+      const yMaxAll = vs.length ? Math.max(...vs) : null
+      console.debug('[waveform] creating uPlot', {
+        width,
+        height,
+        xMinAll,
+        xMaxAll,
+        yMinAll,
+        yMaxAll,
+        currentZoom,
+      })
+    }
 
     const opts: uPlot.Options = {
       width,
@@ -498,72 +525,86 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                 setCursorValues({ raw, filtered })
               },
             ],
+            // 调试：仅记录 uPlot 的 setScale 触发，不做任何写回（不改变逻辑）
             setScale: [
               (u, key) => {
-                if (isProgrammaticScaleRef.current) return
-                // 避免在滚轮缩放后，uPlot 内部的 setScale 通知回流覆盖我们在滚轮中计算的范围
-                // 这里对极近的回调进行忽略（同时不影响拖拽缩放）
-                const now = Date.now()
-                if (now - lastWheelTsRef.current < 80) {
-                  if (DEBUG_ZOOM) {
-                    console.debug('[waveform][hook setScale] ignored due to recent wheel', {
-                      key,
-                      lastWheelMode: lastWheelModeRef.current,
-                      elapsed: now - lastWheelTsRef.current,
-                    })
-                  }
-                  return
-                }
-                if (key !== 'x' && key !== 'y') return
-                // 保险：忽略一切非滚轮产生的 y 轴 setScale 回调，避免意外写回 store
-                if (key === 'y') return
-
-                const xScale = u.scales.x
-                const yScale = u.scales.y
-                if (!xScale || !yScale) return
-
-                const { min: xMin, max: xMax } = xScale
-                const { min: yMin, max: yMax } = yScale
-
+                const xs = u.scales.x
+                const ys = u.scales.y
                 if (DEBUG_ZOOM) {
-                  console.debug('[waveform][hook setScale] user change', {
+                  console.debug('[waveform][hook setScale] fired', {
                     key,
-                    xMin,
-                    xMax,
-                    yMin,
-                    yMax,
+                    isProgrammatic: isProgrammaticScaleRef.current,
+                    lastWheelMsAgo: Date.now() - lastWheelTsRef.current,
+                    xMin: xs?.min,
+                    xMax: xs?.max,
+                    yMin: ys?.min,
+                    yMax: ys?.max,
                   })
+                  // 也打印一次栈，帮助定位调用来源
+                  // eslint-disable-next-line no-console
+                  console.trace('[waveform][hook setScale] stack')
                 }
 
-                if (
-                  xMin == null || xMax == null || yMin == null || yMax == null ||
-                  !Number.isFinite(xMin) || !Number.isFinite(xMax) ||
-                  !Number.isFinite(yMin) || !Number.isFinite(yMax)
-                ) {
-                  return
+                // 守护：若检测到 uPlot 将 X 轴意外重置为全量范围（且非编程/非滚轮触发），立即恢复为 store 中的 currentZoom。
+                if (key === 'x' && !isProgrammaticScaleRef.current) {
+                  const wf = waveformRef.current
+                  const cz = useWaveformStore.getState().currentZoom
+                  const noRecentWheel = Date.now() - lastWheelTsRef.current > 300
+                  if (wf && cz && xs?.min != null && xs?.max != null && noRecentWheel) {
+                    const dataMin = wf.raw.timestamps[0]
+                    const dataMax = wf.raw.timestamps[wf.raw.timestamps.length - 1]
+                    const tol = 1e-9
+                    const isFullX = Math.abs(xs.min - dataMin) < tol && Math.abs(xs.max - dataMax) < tol
+                    const deviatesFromStore = Math.abs(xs.min - cz.xMin) > tol || Math.abs(xs.max - cz.xMax) > tol
+                    if (isFullX && deviatesFromStore) {
+                      if (DEBUG_ZOOM) {
+                        console.warn('[waveform][hook setScale] detected unintended full-range reset; restoring store zoom', {
+                          xs,
+                          store: { xMin: cz.xMin, xMax: cz.xMax },
+                          data: { dataMin, dataMax },
+                        })
+                      }
+                      // 使用微任务/下一帧确保不与当前回调竞争
+                      const plot = uplotRef.current
+                      if (plot) {
+                        queueMicrotask(() => {
+                          applyScale(plot, { x: { min: cz.xMin, max: cz.xMax } })
+                        })
+                      }
+                    }
+                  }
                 }
 
-                const waveformStore = useWaveformStore.getState()
-                const currentZoomState = waveformStore.currentZoom
-                const nextZoom = {
-                  xMin,
-                  xMax,
-                  yMin,
-                  yMax,
-                  timestamp: Date.now(),
+                // 守护：若检测到 Y 轴被意外重置为全量范围（且当前 store 的 y 并非全量），同样恢复。
+                if (key === 'y' && !isProgrammaticScaleRef.current) {
+                  const wf = waveformRef.current
+                  const cz = useWaveformStore.getState().currentZoom
+                  const noRecentWheel = Date.now() - lastWheelTsRef.current > 300
+                  if (wf && cz && ys?.min != null && ys?.max != null && noRecentWheel) {
+                    const v = wf.raw.values
+                    const dataYMin = v && v.length ? Math.min(...v) : null
+                    const dataYMax = v && v.length ? Math.max(...v) : null
+                    const tol = 1e-9
+                    const isFullY = dataYMin != null && dataYMax != null && Math.abs(ys.min - dataYMin) < tol && Math.abs(ys.max - dataYMax) < tol
+                    const storeIsFullY = dataYMin != null && dataYMax != null && Math.abs(cz.yMin - dataYMin) < tol && Math.abs(cz.yMax - dataYMax) < tol
+                    const deviatesFromStore = Math.abs(ys.min - cz.yMin) > tol || Math.abs(ys.max - cz.yMax) > tol
+                    if (isFullY && !storeIsFullY && deviatesFromStore) {
+                      if (DEBUG_ZOOM) {
+                        console.warn('[waveform][hook setScale] Y detected unintended full-range reset; restoring store zoom', {
+                          ys,
+                          store: { yMin: cz.yMin, yMax: cz.yMax },
+                          data: { dataYMin, dataYMax },
+                        })
+                      }
+                      const plot = uplotRef.current
+                      if (plot) {
+                        queueMicrotask(() => {
+                          applyScale(plot, { y: { min: cz.yMin, max: cz.yMax } })
+                        })
+                      }
+                    }
+                  }
                 }
-
-                if (
-                  currentZoomState &&
-                  Math.abs(currentZoomState.xMin - nextZoom.xMin) < 1e-9 &&
-                  Math.abs(currentZoomState.xMax - nextZoom.xMax) < 1e-9 &&
-                  Math.abs(currentZoomState.yMin - nextZoom.yMin) < 1e-9 &&
-                  Math.abs(currentZoomState.yMax - nextZoom.yMax) < 1e-9
-                ) {
-                  return
-                }
-
-                waveformStore.setZoom(nextZoom)
               },
             ],
           },
@@ -769,6 +810,7 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
     plot.over.addEventListener('contextmenu', handleContextMenu)
 
     return () => {
+      if (DEBUG_ZOOM) console.debug('[waveform] destroying uPlot instance')
       plot.over.removeEventListener('click', handlePlotClick)
       plot.over.removeEventListener('mousemove', handleMouseMove)
       plot.over.removeEventListener('mouseleave', handleMouseLeave)
@@ -787,7 +829,12 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       y: { min: currentZoom.yMin, max: currentZoom.yMax },
     })
     if (DEBUG_ZOOM) {
-      console.debug('[waveform][effect currentZoom->applyScale]', currentZoom)
+      const xs = plot.scales.x
+      const ys = plot.scales.y
+      console.debug('[waveform][effect currentZoom->applyScale]', {
+        currentZoom,
+        before: { xMin: xs?.min, xMax: xs?.max, yMin: ys?.min, yMax: ys?.max },
+      })
     }
     const labels = computeEventLabels(plot, eventsRef.current)
     setEventLabels((prev) => (areEventLabelsEqual(prev, labels) ? prev : labels))
@@ -837,6 +884,17 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
       desiredMin = Math.max(desiredXMax - widthRange, dataMin)
     }
 
+    if (DEBUG_ZOOM) {
+      console.debug('[waveform][autoPan] triggered', {
+        latestEnd: latestSegment.endTime,
+        currentXMin: currentZoom.xMin,
+        currentXMax: currentZoom.xMax,
+        desiredMin,
+        desiredXMax,
+        rightPadRatio,
+        triggerRatio,
+      })
+    }
     setZoom({
       xMin: desiredMin,
       xMax: desiredXMax,

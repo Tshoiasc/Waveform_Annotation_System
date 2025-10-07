@@ -31,7 +31,11 @@ export default function WorkspacePage() {
     currentTemplateId: state.currentTemplateId,
     templates: state.templates,
   }))
+  // 访问模板相关的动作
+  const fetchTemplates = useTemplateStore((s) => s.fetchTemplates)
+  const applyTemplate = useTemplateStore((s) => s.applyTemplate)
   const canAnnotate = useAuthStore((state) => state.hasPermission('annotations.annotate'))
+  const canViewTemplates = useAuthStore((state) => state.hasPermission('templates.view'))
   const { isSettingsOpen, closeSettings } = useSettingsStore((s) => ({
     isSettingsOpen: s.isSettingsOpen,
     closeSettings: s.closeSettings,
@@ -58,6 +62,29 @@ export default function WorkspacePage() {
       finishedTrials,
     }
   }, [files])
+
+  // 进入页面时拉取模板
+  useEffect(() => {
+    if (!canViewTemplates) return
+    void fetchTemplates()
+  }, [canViewTemplates, fetchTemplates])
+
+  // 如果未选择模板，自动选择默认模板
+  useEffect(() => {
+    if (!canViewTemplates) return
+    if (!templates || templates.length === 0) return
+
+    const exists = currentTemplateId
+      ? templates.some((t) => t._id === currentTemplateId)
+      : false
+    if (exists) return
+
+    // 优先选择名称包含“默认”的模板，否则使用第一个
+    const preferred = templates.find((t) => /默认/.test(t.name)) ?? templates[0]
+    if (preferred?._id) {
+      applyTemplate(preferred._id)
+    }
+  }, [templates, currentTemplateId, canViewTemplates, applyTemplate])
 
   const statChips = [
     {
