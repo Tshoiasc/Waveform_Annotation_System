@@ -86,8 +86,9 @@ function computeEventLabels(u: uPlot, events: AnnotationEvent[]): EventLabel[] {
     const endPos = u.valToPos(event.endTime, 'x', true)
     if (!Number.isFinite(startPos) || !Number.isFinite(endPos)) continue
 
-    const rawLeft = bbox.left + Math.min(startPos, endPos)
-    const rawRight = bbox.left + Math.max(startPos, endPos)
+    // 画布坐标系下直接钳制到绘图区，避免重复叠加 bbox.left
+    const rawLeft = Math.min(startPos, endPos)
+    const rawRight = Math.max(startPos, endPos)
     const clampedLeft = Math.max(bbox.left, rawLeft)
     const clampedRight = Math.min(bbox.left + bbox.width, rawRight)
     const width = clampedRight - clampedLeft
@@ -400,13 +401,19 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                 annotationsRef.current.forEach((segment) => {
                   const startX = u.valToPos(segment.startTime, 'x', true)
                   const endX = u.valToPos(segment.endTime, 'x', true)
-                  const left = Math.min(startX, endX)
-                  const widthPx = Math.max(1, Math.abs(endX - startX))
+                  // 钳制到绘图区，可避免在左/右边界缩放时出现偏移或被裁剪不一致
+                  const rawLeft = Math.min(startX, endX)
+                  const rawRight = Math.max(startX, endX)
+                  const left = Math.max(u.bbox.left, rawLeft)
+                  const right = Math.min(u.bbox.left + u.bbox.width, rawRight)
+                  const widthPx = Math.max(0, right - left)
                   const color = resolveSegmentColor(segment, phasesRef.current)
                   const isDraft = segment.synced === false
 
-                  ctx.fillStyle = applyAlpha(color, isDraft ? 0.14 : 0.22)
-                  ctx.fillRect(left, u.bbox.top, widthPx, u.bbox.height)
+                  if (widthPx > 0) {
+                    ctx.fillStyle = applyAlpha(color, isDraft ? 0.14 : 0.22)
+                    ctx.fillRect(left, u.bbox.top, widthPx, u.bbox.height)
+                  }
 
                   ctx.strokeStyle = applyAlpha(color, isDraft ? 0.7 : 0.5)
                   ctx.lineWidth = isDraft ? 2 : 1
@@ -414,10 +421,13 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                     ctx.setLineDash([6, 4])
                   }
                   ctx.beginPath()
-                  ctx.moveTo(left, u.bbox.top)
-                  ctx.lineTo(left, u.bbox.top + u.bbox.height)
-                  ctx.moveTo(left + widthPx, u.bbox.top)
-                  ctx.lineTo(left + widthPx, u.bbox.top + u.bbox.height)
+                  // 竖向边界线也进行钳制
+                  const leftEdge = Math.max(u.bbox.left, rawLeft)
+                  const rightEdge = Math.min(u.bbox.left + u.bbox.width, rawRight)
+                  ctx.moveTo(leftEdge, u.bbox.top)
+                  ctx.lineTo(leftEdge, u.bbox.top + u.bbox.height)
+                  ctx.moveTo(rightEdge, u.bbox.top)
+                  ctx.lineTo(rightEdge, u.bbox.top + u.bbox.height)
                   ctx.stroke()
                   if (isDraft) {
                     ctx.setLineDash([])
@@ -429,8 +439,12 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                   const endX = u.valToPos(event.endTime, 'x', true)
                   if (!Number.isFinite(startX) || !Number.isFinite(endX)) return
 
-                  const left = Math.min(startX, endX)
-                  const right = Math.max(startX, endX)
+                  // 事件括号的位置在缩放边界处做钳制，避免左/右边界出现错位
+                  const rawLeft = Math.min(startX, endX)
+                  const rawRight = Math.max(startX, endX)
+                  const left = Math.max(u.bbox.left, rawLeft)
+                  const right = Math.min(u.bbox.left + u.bbox.width, rawRight)
+                  if (right <= left) return
                   const bracketY = u.bbox.top + 6
 
                   ctx.strokeStyle = 'rgba(15, 23, 42, 0.35)'
@@ -459,8 +473,10 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                 const isAnnotatingNow = isAnnotatingRef.current
 
                 if (isAnnotatingNow && pending) {
-                  const pendingX = u.valToPos(pending.time, 'x', true)
+                  let pendingX = u.valToPos(pending.time, 'x', true)
                   if (Number.isFinite(pendingX)) {
+                    // 钳制到绘图区
+                    pendingX = Math.max(u.bbox.left, Math.min(u.bbox.left + u.bbox.width, pendingX))
                     ctx.save()
                     ctx.strokeStyle = 'rgba(37, 99, 235, 0.55)'
                     ctx.setLineDash([6, 6])
@@ -494,18 +510,23 @@ export default function WaveformChart({ width, height }: WaveformChartProps) {
                   const startX = u.valToPos(pending.time, 'x', true)
                   const endX = u.valToPos(hover.time, 'x', true)
                   if (Number.isFinite(startX) && Number.isFinite(endX)) {
-                    const left = Math.min(startX, endX)
-                    const widthPx = Math.max(1, Math.abs(endX - startX))
+                    const rawLeft = Math.min(startX, endX)
+                    const rawRight = Math.max(startX, endX)
+                    const left = Math.max(u.bbox.left, rawLeft)
+                    const right = Math.min(u.bbox.left + u.bbox.width, rawRight)
+                    const widthPx = Math.max(0, right - left)
                     const phase = phasesRef.current[currentPhaseIndexRef.current]
                     const color = phase?.color ?? '#3b82f6'
 
                     ctx.save()
-                    ctx.fillStyle = applyAlpha(color, 0.16)
-                    ctx.fillRect(left, u.bbox.top, widthPx, u.bbox.height)
+                    if (widthPx > 0) {
+                      ctx.fillStyle = applyAlpha(color, 0.16)
+                      ctx.fillRect(left, u.bbox.top, widthPx, u.bbox.height)
 
-                    ctx.strokeStyle = applyAlpha(color, 0.5)
-                    ctx.lineWidth = 1
-                    ctx.strokeRect(left, u.bbox.top, widthPx, u.bbox.height)
+                      ctx.strokeStyle = applyAlpha(color, 0.5)
+                      ctx.lineWidth = 1
+                      ctx.strokeRect(left, u.bbox.top, widthPx, u.bbox.height)
+                    }
                     ctx.restore()
                   }
                 }
