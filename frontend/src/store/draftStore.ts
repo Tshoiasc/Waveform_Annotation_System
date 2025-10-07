@@ -249,22 +249,6 @@ export const useDraftStore = create<DraftState>()(
         const draft = state.drafts[draftId]
         if (!draft) return
         if (draft.status === 'syncing') return
-        if (draft.segments.length === 0) {
-          set((current) => ({
-            drafts: {
-              ...current.drafts,
-              [draftId]: {
-                ...draft,
-                status: 'synced',
-                lastSyncedAt: Date.now(),
-              },
-            },
-            lastMessage: '草稿为空，无需同步',
-          }))
-          get().removeDraft(draftId)
-          return
-        }
-
         get().markSyncing(draftId)
         try {
           const result = await annotationService.syncDraft(

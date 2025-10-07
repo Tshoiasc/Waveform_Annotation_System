@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { apiClient } from '../services/api'
 
 interface UserRole {
   name: string
@@ -35,17 +36,11 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       isAuthenticated: false,
       async login(username, password) {
-        const response = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        })
-
+        const response = await apiClient.post('/api/auth/login', { username, password })
         if (!response.ok) {
           const error = await response.json()
           throw new Error(error.detail ?? '登录失败')
         }
-
         const data = await response.json()
 
         set({
@@ -55,22 +50,16 @@ export const useAuthStore = create<AuthState>()(
         })
       },
       async register(username, password, email, fullName) {
-        const response = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username,
-            password,
-            email,
-            full_name: fullName
-          })
+        const response = await apiClient.post('/api/auth/register', {
+          username,
+          password,
+          email,
+          full_name: fullName,
         })
-
         if (!response.ok) {
           const error = await response.json()
           throw new Error(error.detail ?? '注册失败')
         }
-
         await get().login(username, password)
       },
       logout() {

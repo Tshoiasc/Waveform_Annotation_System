@@ -9,7 +9,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """全局配置"""
 
-    MONGODB_URI: str = os.getenv("MONGODB_URI", "mongodb://mongodb:Qq1970251968@117.50.201.9:27018/")
+    # 默认连接外部 MongoDB（可通过 .env 覆盖）
+    MONGODB_URI: str = os.getenv(
+        "MONGODB_URI",
+        "mongodb://mongodb:Qq1970251968@117.50.201.9:27018/",
+    )
     MONGODB_DATABASE: str = os.getenv("MONGODB_DATABASE", "waveform-annotation-system")
 
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://:Qq1970251968@117.50.201.9:26739")

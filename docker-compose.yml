@@ -1,24 +1,7 @@
 name: waveform-annotation
 
 services:
-  # MongoDB数据库
-  mongodb:
-    image: mongo:7.0
-    container_name: waveform-mongodb
-    restart: always
-    ports:
-      - "27018:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: mongodb
-      MONGO_INITDB_ROOT_PASSWORD: Qq1970251968
-      MONGO_INITDB_DATABASE: waveform-annotation-system
-    volumes:
-      - mongo_data:/data/db
-      - ./mongo-init:/docker-entrypoint-initdb.d:ro
-    networks:
-      - waveform-net
-
-  # FastAPI后端 (使用云端Redis)
+  # FastAPI后端（连接外部 MongoDB，使用云端 Redis）
   backend:
     build:
       context: ./backend
@@ -28,16 +11,20 @@ services:
     ports:
       - "8000:8000"
     environment:
-      MONGODB_URI: mongodb://mongodb:Qq1970251968@mongodb:27017/waveform-annotation-system
+      # MongoDB 连接（默认连接外部数据源；可在 .env 覆盖）
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:Qq1970251968@117.50.201.9:27018/}
       REDIS_URL: redis://:Qq1970251968@117.50.201.9:26739
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       H5_DATA_PATH: /data/dataset
-      CORS_ORIGINS: "http://localhost:3000,http://frontend:80"
+      CORS_ORIGINS: '["http://localhost:3000", "http://frontend:80", "http://127.0.0.1:3000"]'
+      # 数据集配置
+      DATASET_PATH: ${DATASET_PATH:-./dataset}
+      ENABLE_DATASET_WRITE: ${ENABLE_DATASET_WRITE:-true}
     volumes:
-      - ./dataset:/data/dataset:ro
+      # 数据集目录 - 可读写挂载，支持外部数据集路径
+      - ${DATASET_PATH:-./dataset}:/data/dataset
+      # 开发模式：挂载代码目录（生产环境可移除）
       - ./backend:/app
-    depends_on:
-      - mongodb
     networks:
       - waveform-net
 
@@ -46,19 +33,16 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     container_name: waveform-frontend
     restart: always
     ports:
       - "3000:80"
-    environment:
-      REACT_APP_API_URL: http://localhost:8000
     depends_on:
       - backend
     networks:
       - waveform-net
-
-volumes:
-  mongo_data:
 
 networks:
   waveform-net:

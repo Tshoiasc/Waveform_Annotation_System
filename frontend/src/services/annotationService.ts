@@ -18,7 +18,10 @@ const annotationService = {
     activeVersionId: string | null
   }> {
     const query = versionId ? `?version_id=${encodeURIComponent(versionId)}` : ''
-    const response = await apiClient.get(`${API_BASE}/${fileId}/trials/${trialIndex}${query}`)
+    const response = await apiClient.get(
+      `${API_BASE}/${fileId}/trials/${trialIndex}${query}`,
+      { timeout: 30000 } as any,
+    )
     if (!response.ok) {
       throw new Error('获取标注数据失败')
     }
@@ -31,7 +34,10 @@ const annotationService = {
   },
 
   async listVersions(fileId: string, trialIndex: number): Promise<AnnotationVersionMeta[]> {
-    const response = await apiClient.get(`${API_BASE}/${fileId}/trials/${trialIndex}/versions`)
+    const response = await apiClient.get(
+      `${API_BASE}/${fileId}/trials/${trialIndex}/versions`,
+      { timeout: 15000 } as any,
+    )
     if (!response.ok) {
       throw new Error('获取标注版本失败')
     }
@@ -68,7 +74,8 @@ const annotationService = {
 
     const response = await apiClient.post(
       `${API_BASE}/${fileId}/trials/${trialIndex}/sync`,
-      payload
+      payload,
+      { timeout: 30000 } as any,
     )
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({}))
@@ -83,7 +90,8 @@ const annotationService = {
 
   async deleteVersion(fileId: string, trialIndex: number, versionId: string): Promise<void> {
     const response = await apiClient.delete(
-      `${API_BASE}/${fileId}/trials/${trialIndex}/versions/${versionId}`
+      `${API_BASE}/${fileId}/trials/${trialIndex}/versions/${versionId}`,
+      { timeout: 15000 } as any,
     )
     if (!response.ok) {
       throw new Error('删除标注版本失败')

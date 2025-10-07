@@ -3,7 +3,7 @@ import type { FileInfo, TrialMetadata, WaveformResponse } from '../types/wavefor
 
 class FileService {
   async getFiles(): Promise<FileInfo[]> {
-    const response = await apiClient.get('/api/files')
+    const response = await apiClient.get('/api/files', { timeout: 20000 } as any)
     if (!response.ok) {
       throw new Error('获取文件列表失败')
     }
@@ -11,7 +11,7 @@ class FileService {
   }
 
   async getTrials(fileId: string): Promise<TrialMetadata[]> {
-    const response = await apiClient.get(`/api/files/${fileId}/trials`)
+    const response = await apiClient.get(`/api/files/${fileId}/trials`, { timeout: 30000 } as any)
     if (!response.ok) {
       throw new Error('获取试验元数据失败')
     }
@@ -19,7 +19,10 @@ class FileService {
   }
 
   async getWaveform(fileId: string, trialIndex: number): Promise<WaveformResponse> {
-    const response = await apiClient.get(`/api/files/${fileId}/trials/${trialIndex}/waveform`)
+    const response = await apiClient.get(
+      `/api/files/${fileId}/trials/${trialIndex}/waveform`,
+      { timeout: 60000 } as any,
+    )
     if (!response.ok) {
       throw new Error('获取波形数据失败')
     }
